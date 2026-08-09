@@ -1,0 +1,93 @@
+import { useState } from 'react';
+import { Timer, ListTodo, Calendar, Users, Trophy, User, Flame } from 'lucide-react';
+import { FocusView } from './components/FocusView';
+import { TasksView } from './components/TasksView';
+import { ScheduleView } from './components/ScheduleView';
+import { StudyRoomsView } from './components/StudyRoomsView';
+import { RankingsView } from './components/RankingsView';
+import { ProfileView } from './components/ProfileView';
+import { TimerWidget } from './components/TimerWidget';
+import { OnboardingModal } from './components/OnboardingModal';
+import { useTheme } from './hooks';
+import { useStore } from './store';
+import { initTelegram } from './telegram';
+
+type Tab = 'focus' | 'tasks' | 'schedule' | 'rooms' | 'rankings' | 'profile';
+
+const TABS: { id: Tab; label: string; icon: any }[] = [
+  { id: 'focus', label: 'Focus', icon: Timer },
+  { id: 'tasks', label: 'Tasks', icon: ListTodo },
+  { id: 'schedule', label: 'Schedule', icon: Calendar },
+  { id: 'rooms', label: 'Rooms', icon: Users },
+  { id: 'rankings', label: 'Ranks', icon: Trophy },
+  { id: 'profile', label: 'Profile', icon: User },
+];
+
+export default function App() {
+  useTheme();
+  initTelegram();
+  const [tab, setTab] = useState<Tab>('focus');
+  const streak = useStore((s) => s.profile.currentStreak);
+
+  const startFocusFromBlock = (_subject: string) => {
+    setTab('focus');
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col">
+      {/* Ambient gradient background */}
+      <div className="fixed inset-0 -z-10 overflow-hidden pointer-events-none">
+        <div className="absolute -top-40 -right-40 w-96 h-96 rounded-full bg-accent/20 blur-3xl" />
+        <div className="absolute top-1/3 -left-40 w-80 h-80 rounded-full bg-accent/10 blur-3xl" />
+        <div className="absolute bottom-0 right-1/4 w-72 h-72 rounded-full bg-accent/5 blur-3xl" />
+      </div>
+
+      {/* Streak banner */}
+      {streak > 0 && (
+        <div className="fixed top-3 right-3 z-30 glass rounded-full px-3 py-1.5 flex items-center gap-1.5 text-xs font-bold shadow-glass-sm">
+          <Flame size={14} className="text-accent" />
+          <span>{streak}</span>
+        </div>
+      )}
+
+      {/* Onboarding */}
+      <OnboardingModal />
+
+      {/* Floating timer widget */}
+      <TimerWidget />
+
+      {/* Main content */}
+      <main className="flex-1 max-w-2xl w-full mx-auto px-4 pt-6 pb-28">
+        {tab === 'focus' && <FocusView />}
+        {tab === 'tasks' && <TasksView />}
+        {tab === 'schedule' && <ScheduleView onStartFocus={startFocusFromBlock} />}
+        {tab === 'rooms' && <StudyRoomsView />}
+        {tab === 'rankings' && <RankingsView />}
+        {tab === 'profile' && <ProfileView />}
+      </main>
+
+      {/* Bottom tab bar — liquid glass */}
+      <nav className="fixed bottom-0 left-0 right-0 z-30 px-4 pb-4 pt-2">
+        <div className="max-w-2xl mx-auto">
+          <div className="glass-strong rounded-3xl px-2 py-2 flex items-center justify-between shadow-glass-lg">
+            {TABS.map((t) => {
+              const active = tab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => setTab(t.id)}
+                  className="relative flex flex-col items-center justify-center gap-0.5 flex-1 py-2 rounded-2xl glass-press transition-all"
+                >
+                  <div className={`relative w-10 h-10 rounded-2xl flex items-center justify-center transition-all ${active ? 'bg-accent text-white shadow-glow scale-105' : 'text-neutralt-500 dark:text-neutralt-400'}`}>
+                    <t.icon size={20} />
+                  </div>
+                  <span className={`text-[10px] font-semibold transition-colors ${active ? 'text-accent' : 'text-neutralt-500 dark:text-neutralt-400'}`}>{t.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </nav>
+    </div>
+  );
+}
