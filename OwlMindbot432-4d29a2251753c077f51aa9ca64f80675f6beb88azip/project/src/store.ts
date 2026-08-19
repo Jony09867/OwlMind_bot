@@ -18,6 +18,7 @@ import {
   levelFromXp,
 } from './types';
 import { getTelegramUserId } from './telegram';
+import { isSupabaseConfigured, supabase } from './supabaseClient';
 
 export type TimerState = {
   isRunning: boolean;
@@ -360,6 +361,14 @@ export const store = {
       return { ...s, profile, sessions: [...s.sessions, session] };
     });
 
+    if (isSupabaseConfigured && opts.roomId) {
+      supabase.rpc('increment_room_totals', {
+        p_room_id: opts.roomId,
+        p_study_sec: opts.durationSec,
+        p_sessions: 1,
+      }).then(() => {});
+    }
+
     return result;
   },
 
@@ -395,6 +404,20 @@ export const store = {
       });
       return { ...s, rooms };
     });
+    if (isSupabaseConfigured && state.joinedRoomId) {
+      const uid = getTelegramUserId() ?? 'local-user';
+      supabase
+        .from('room_members')
+        .update({ subject, elapsed_sec: elapsedSec, is_online: true })
+        .eq('room_id', state.joinedRoomId)
+        .eq('user_id', uid)
+        .then(() => {});
+      supabase
+        .from('study_rooms')
+        .update({ total_study_sec: state.rooms.find((r) => r.id === state.joinedRoomId)?.totalStudySec ?? 0 })
+        .eq('id', state.joinedRoomId)
+        .then(() => {});
+    }
   },
 
   updateSettings(patch: Partial<Settings>): void {

@@ -13,6 +13,7 @@ export function StudyRoomsView() {
   const joinedRoomId = useStore((s) => s.joinedRoomId);
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [members, setMembers] = useState<RoomMemberRow[]>([]);
+  const [memberCounts, setMemberCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
@@ -22,6 +23,7 @@ export function StudyRoomsView() {
   const userName = profile.name && profile.name !== 'You' ? profile.name : (getTelegramUserName() ?? 'You');
   const userAvatar = profile.avatar || '🦉';
 
+  // Load all rooms + aggregate member counts.
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setLoading(false);
@@ -30,7 +32,7 @@ export function StudyRoomsView() {
     }
 
     let active = true;
-    (async () => {
+    const loadRooms = async () => {
       setLoading(true);
       const { data, error } = await supabase
         .from('study_rooms')
@@ -44,14 +46,27 @@ export function StudyRoomsView() {
         setRooms(data ?? []);
       }
       setLoading(false);
-    })();
+    };
+
+    const loadCounts = async () => {
+      const { data, error } = await supabase
+        .from('room_members')
+        .select('room_id');
+      if (!active || error || !data) return;
+      const counts: Record<string, number> = {};
+      data.forEach((r: { room_id: string }) => {
+        counts[r.room_id] = (counts[r.room_id] ?? 0) + 1;
+      });
+      setMemberCounts(counts);
+    };
+
+    loadRooms();
+    loadCounts();
 
     const channel = supabase
       .channel('study_rooms_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'study_rooms' }, () => {
-        supabase.from('study_rooms').select('*').order('created_at', { ascending: false })
-          .then(({ data }) => { if (active && data) setRooms(data); });
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'study_rooms' }, () => loadRooms())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, () => loadCounts())
       .subscribe();
 
     return () => {
@@ -60,40 +75,61 @@ export function StudyRoomsView() {
     };
   }, []);
 
+  // Load members for the joined room + keep this user online.
   useEffect(() => {
-    if (!joinedRoomId) { setMembers([]); return; }
-    if (!isSupabaseConfigured) { setMembers([]); return; }
+    if (!joinedRoomId || !isSupabaseConfigured) {
+      setMembers([]);
+      return;
+    }
 
     let active = true;
-    (async () => {
+    const loadMembers = async () => {
       const { data, error } = await supabase
         .from('room_members')
         .select('*')
         .eq('room_id', joinedRoomId)
         .order('joined_at', { ascending: true });
-      if (!active) return;
-      if (!error) setMembers(data ?? []);
-    })();
+      if (!active || error) return;
+      setMembers(data ?? []);
+    };
+
+    const markOnline = async () => {
+      await supabase
+        .from('room_members')
+        .update({ is_online: true })
+        .eq('room_id', joinedRoomId)
+        .eq('user_id', userId);
+    };
+
+    loadMembers();
+    markOnline();
 
     const channel = supabase
       .channel(`room_members_${joinedRoomId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${joinedRoomId}` }, () => {
-        supabase.from('room_members').select('*').eq('room_id', joinedRoomId).order('joined_at', { ascending: true })
-          .then(({ data }) => { if (active && data) setMembers(data); });
-      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${joinedRoomId}` }, () => loadMembers())
       .subscribe();
+
+    const onUnload = () => {
+      supabase
+        .from('room_members')
+        .update({ is_online: false })
+        .eq('room_id', joinedRoomId!)
+        .eq('user_id', userId);
+    };
+    window.addEventListener('beforeunload', onUnload);
 
     return () => {
       active = false;
       supabase.removeChannel(channel);
+      window.removeEventListener('beforeunload', onUnload);
+      onUnload();
     };
-  }, [joinedRoomId]);
+  }, [joinedRoomId, userId]);
 
   const joinedRoom = rooms.find((r) => r.id === joinedRoomId);
 
   const handleJoin = async (roomId: string) => {
-    if (!isSupabaseConfigured) return;
-    if (joinedRoomId === roomId) return;
+    if (!isSupabaseConfigured || joinedRoomId === roomId) return;
     const { data: existingMember } = await supabase
       .from('room_members')
       .select('id')
@@ -110,6 +146,12 @@ export function StudyRoomsView() {
         elapsed_sec: 0,
         is_online: true,
       });
+    } else {
+      await supabase
+        .from('room_members')
+        .update({ is_online: true, user_name: userName, user_avatar: userAvatar })
+        .eq('room_id', roomId)
+        .eq('user_id', userId);
     }
     store.joinRoom(roomId);
     setTab('rooms');
@@ -117,10 +159,16 @@ export function StudyRoomsView() {
 
   const handleLeave = async () => {
     if (!joinedRoomId) return;
-    await supabase.from('room_members').delete().eq('room_id', joinedRoomId).eq('user_id', userId);
+    await supabase
+      .from('room_members')
+      .update({ is_online: false })
+      .eq('room_id', joinedRoomId)
+      .eq('user_id', userId);
     store.leaveRoom();
     setMembers([]);
   };
+
+  const visibleRooms = rooms.filter((r) => !r.is_private || r.owner_id === userId || r.id === joinedRoomId);
 
   return (
     <div className="space-y-5 animate-fade-in pb-4">
@@ -214,12 +262,12 @@ export function StudyRoomsView() {
         )}
         {loading ? (
           <p className="text-sm text-neutralt-500 text-center py-8">Loading rooms…</p>
-        ) : rooms.filter((r) => !r.is_private || r.owner_id === userId || r.id === joinedRoomId).length === 0 && !joinedRoom ? (
+        ) : visibleRooms.length === 0 && !joinedRoom ? (
           <EmptyState icon={Users} title="No rooms available" subtitle="Create a room and invite friends." />
         ) : (
           <div className="space-y-3">
-            {rooms.filter((r) => !r.is_private || r.owner_id === userId || r.id === joinedRoomId).map((r) => (
-              <RoomCard key={r.id} room={r} joined={r.id === joinedRoomId} memberCount={members.filter((m) => m.room_id === r.id).length} onJoin={() => handleJoin(r.id)} />
+            {visibleRooms.map((r) => (
+              <RoomCard key={r.id} room={r} joined={r.id === joinedRoomId} memberCount={memberCounts[r.id] ?? 0} onJoin={() => handleJoin(r.id)} />
             ))}
           </div>
         )}
@@ -241,7 +289,7 @@ function RoomCard({ room, joined, memberCount, onJoin }: { room: RoomRow; joined
             {room.is_private && <Lock size={14} className="text-neutralt-400" />}
           </div>
           <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5 flex items-center gap-1">
-            <Crown size={11} /> {room.owner_name} · {memberCount || room.total_sessions} members
+            <Crown size={11} /> {room.owner_name} · {memberCount} members
           </p>
         </div>
         {!joined && (
