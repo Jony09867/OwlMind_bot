@@ -1,14 +1,67 @@
-import { useState } from 'react';
-import { Crown, TrendingUp, Users, Globe, Calendar, Flame } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Crown, TrendingUp, Users, Globe, Calendar, Flame, RefreshCw, Trophy } from 'lucide-react';
 import { GlassCard, Badge } from './ui';
 import { useStore, getRankings } from '../store';
 import { fmtHM } from '../hooks';
 import type { RankingScope } from '../types';
+import { isSupabaseConfigured, supabase, type RoomMemberRow } from '../supabaseClient';
+import { getTelegramUserId } from '../telegram';
 
 export function RankingsView() {
   const profile = useStore((s) => s.profile);
   const [scope, setScope] = useState<RankingScope>('weekly');
-  const rankings = getRankings(scope, profile);
+  const [remoteEntries, setRemoteEntries] = useState<ReturnType<typeof getRankings>>([]);
+  const [loading, setLoading] = useState(isSupabaseConfigured);
+  const [error, setError] = useState('');
+
+  const loadRankings = async () => {
+    if (!isSupabaseConfigured) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    setError('');
+    const { data, error: loadError } = await supabase.from('room_members').select('*');
+    if (loadError) {
+      setError('Ranking ma’lumotlarini yuklab bo‘lmadi.');
+      setLoading(false);
+      return;
+    }
+    const grouped = new Map<string, RoomMemberRow>();
+    (data ?? []).forEach((member) => {
+      const previous = grouped.get(member.user_id);
+      if (previous) {
+        grouped.set(member.user_id, {
+          ...previous,
+          elapsed_sec: previous.elapsed_sec + member.elapsed_sec,
+        });
+      } else {
+        grouped.set(member.user_id, member);
+      }
+    });
+    setRemoteEntries([...grouped.values()].map((member) => ({
+      id: member.user_id,
+      name: member.user_name || 'Anonymous learner',
+      avatar: member.user_avatar || '🦉',
+      studySec: member.elapsed_sec,
+      sessions: 0,
+      isYou: member.user_id === (getTelegramUserId() ?? 'local-user'),
+      level: 1,
+    })));
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadRankings();
+    if (!isSupabaseConfigured) return;
+    const channel = supabase
+      .channel('rankings_room_members')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, loadRankings)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
+  const rankings = getRankings(scope, profile, remoteEntries);
 
   const scopes: { value: RankingScope; label: string; icon: any }[] = [
     { value: 'daily', label: 'Daily', icon: Calendar },
@@ -27,7 +80,7 @@ export function RankingsView() {
     <div className="space-y-5 animate-fade-in pb-4">
       <header className="px-1">
         <h1 className="font-display text-3xl font-extrabold tracking-tight">Rankings</h1>
-        <p className="text-neutralt-500 dark:text-neutralt-400 text-sm mt-1">You're #{yourRank} this {scope === 'seasonal' ? 'season' : scope === 'global' ? 'all-time' : scope.replace('ly', '')}</p>
+        <p className="text-neutralt-500 dark:text-neutralt-400 text-sm mt-1">You’re #{yourRank} · {scope === 'global' ? 'all-time' : scope === 'seasonal' ? 'season' : scope}</p>
       </header>
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1 pb-1">
@@ -55,6 +108,21 @@ export function RankingsView() {
             <p className="font-semibold text-sm">Season ends in 18 days</p>
             <p className="text-xs text-neutralt-500 dark:text-neutralt-400">Rankings reset each season. Lifetime stats never reset.</p>
           </div>
+        </GlassCard>
+      )}
+
+      {loading && <p className="text-sm text-neutralt-500 text-center py-3">Updating rankings…</p>}
+      {error && (
+        <GlassCard subtle className="p-3 flex items-center justify-between gap-3">
+          <p className="text-sm text-red-500">{error}</p>
+          <button onClick={loadRankings} className="text-accent shrink-0" aria-label="Retry rankings"><RefreshCw size={16} /></button>
+        </GlassCard>
+      )}
+      {!loading && !error && rankings.length === 1 && (
+        <GlassCard subtle className="p-5 text-center">
+          <Trophy size={22} className="mx-auto text-accent mb-2" />
+          <p className="font-semibold text-sm">You’re the first learner here</p>
+          <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1">Join a study room to see other learners in the live ranking.</p>
         </GlassCard>
       )}
 

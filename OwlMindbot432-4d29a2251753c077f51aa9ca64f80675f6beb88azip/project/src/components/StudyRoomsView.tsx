@@ -130,14 +130,18 @@ export function StudyRoomsView() {
 
   const handleJoin = async (roomId: string) => {
     if (!isSupabaseConfigured || joinedRoomId === roomId) return;
-    const { data: existingMember } = await supabase
+    const { data: existingMember, error: memberLookupError } = await supabase
       .from('room_members')
       .select('id')
       .eq('room_id', roomId)
       .eq('user_id', userId)
       .maybeSingle();
+    if (memberLookupError) {
+      console.error('Could not check room membership', memberLookupError.message);
+      return;
+    }
     if (!existingMember) {
-      await supabase.from('room_members').insert({
+      const { error } = await supabase.from('room_members').insert({
         room_id: roomId,
         user_id: userId,
         user_name: userName,
@@ -146,12 +150,20 @@ export function StudyRoomsView() {
         elapsed_sec: 0,
         is_online: true,
       });
+      if (error) {
+        console.error('Could not join room', error.message);
+        return;
+      }
     } else {
-      await supabase
+      const { error } = await supabase
         .from('room_members')
         .update({ is_online: true, user_name: userName, user_avatar: userAvatar })
         .eq('room_id', roomId)
         .eq('user_id', userId);
+      if (error) {
+        console.error('Could not update room membership', error.message);
+        return;
+      }
     }
     store.joinRoom(roomId);
     setTab('rooms');
@@ -169,6 +181,11 @@ export function StudyRoomsView() {
   };
 
   const visibleRooms = rooms.filter((r) => !r.is_private || r.owner_id === userId || r.id === joinedRoomId);
+  const handleCreated = (room: RoomRow) => {
+    setRooms((current) => [room, ...current.filter((r) => r.id !== room.id)]);
+    setMemberCounts((current) => ({ ...current, [room.id]: 1 }));
+    void handleJoin(room.id);
+  };
 
   return (
     <div className="space-y-5 animate-fade-in pb-4">
@@ -273,7 +290,7 @@ export function StudyRoomsView() {
         )}
       </div>
 
-      <CreateRoomModal open={showCreate} onClose={() => setShowCreate(false)} userId={userId} userName={userName} userAvatar={userAvatar} onCreated={(roomId) => handleJoin(roomId)} />
+      <CreateRoomModal open={showCreate} onClose={() => setShowCreate(false)} userId={userId} userName={userName} userAvatar={userAvatar} onCreated={handleCreated} />
       <InviteModal open={showInvite} onClose={() => setShowInvite(false)} roomId={joinedRoomId} userId={userId} />
     </div>
   );
@@ -306,7 +323,7 @@ function RoomCard({ room, joined, memberCount, onJoin }: { room: RoomRow; joined
   );
 }
 
-function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreated }: { open: boolean; onClose: () => void; userId: string; userName: string; userAvatar: string; onCreated: (roomId: string) => void }) {
+function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreated }: { open: boolean; onClose: () => void; userId: string; userName: string; userAvatar: string; onCreated: (room: RoomRow) => void }) {
   const [name, setName] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -335,7 +352,7 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
       setErrorMsg('Could not create the room. Please try again.');
       return;
     }
-    await supabase.from('room_members').insert({
+    const { error: memberError } = await supabase.from('room_members').insert({
       room_id: data.id,
       user_id: userId,
       user_name: userName,
@@ -344,10 +361,17 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
       elapsed_sec: 0,
       is_online: true,
     });
+    if (memberError) {
+      console.error('Create room member failed', memberError.message);
+      await supabase.from('study_rooms').delete().eq('id', data.id);
+      setCreating(false);
+      setErrorMsg('Room yaratildi, lekin unga qo‘shib bo‘lmadi. RLS siyosatlarini tekshiring.');
+      return;
+    }
     setCreating(false);
     setName(''); setIsPrivate(false);
     onClose();
-    onCreated(data.id);
+    onCreated(data as RoomRow);
   };
 
   return (

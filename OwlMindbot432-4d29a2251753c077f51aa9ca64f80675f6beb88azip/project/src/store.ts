@@ -523,25 +523,17 @@ export function useWeeklyStudySec(): number[] {
   }, [sessions]);
 }
 
-export function getRankings(scope: string, profile: UserProfile): RankingEntry[] {
-  const youSec = profile.totalStudySec;
-  const base: RankingEntry[] = [
-    { id: 'you', name: profile.name, avatar: profile.avatar, studySec: youSec, sessions: profile.totalSessions, isYou: true, level: profile.level },
-  ];
-
-  const bots: RankingEntry[] = [
-    { id: 'ali', name: 'Ali', avatar: '🦊', studySec: youSec * 1.3 + 1800, sessions: 48, level: 8, isYou: false },
-    { id: 'john', name: 'John', avatar: '🐱', studySec: youSec * 0.8 + 2400, sessions: 32, level: 6, isYou: false },
-    { id: 'sara', name: 'Sara', avatar: '🐰', studySec: youSec * 1.5 + 3600, sessions: 65, level: 11, isYou: false },
-    { id: 'lena', name: 'Lena', avatar: '🐼', studySec: youSec * 0.6 + 1200, sessions: 22, level: 4, isYou: false },
-    { id: 'david', name: 'David', avatar: '🦁', studySec: youSec * 1.1 + 3000, sessions: 51, level: 9, isYou: false },
-    { id: 'anna', name: 'Anna', avatar: '🐨', studySec: youSec * 0.9 + 1800, sessions: 38, level: 7, isYou: false },
-    { id: 'mike', name: 'Mike', avatar: '🐸', studySec: youSec * 0.4 + 600, sessions: 15, level: 3, isYou: false },
-    { id: 'tom', name: 'Tom', avatar: '🐯', studySec: youSec * 1.2 + 2700, sessions: 44, level: 8, isYou: false },
-  ];
-
-  const all = [...base, ...bots];
-  const factor = scope === 'daily' ? 0.15 : scope === 'weekly' ? 0.4 : scope === 'monthly' ? 0.7 : scope === 'seasonal' ? 0.9 : 1;
-  const adjusted = all.map((e) => ({ ...e, studySec: Math.floor(e.studySec * factor) + Math.floor(Math.random() * 600) }));
-  return adjusted.sort((a, b) => b.studySec - a.studySec);
+export function getRankings(_scope: string, profile: UserProfile, remoteEntries: RankingEntry[] = []): RankingEntry[] {
+  const currentUser: RankingEntry = {
+    id: getTelegramUserId() ?? 'local-user',
+    name: profile.name,
+    avatar: profile.avatar,
+    studySec: profile.totalStudySec,
+    sessions: profile.totalSessions,
+    isYou: true,
+    level: profile.level,
+  };
+  const byId = new Map(remoteEntries.map((entry) => [entry.id, entry]));
+  byId.set(currentUser.id, { ...byId.get(currentUser.id), ...currentUser, isYou: true });
+  return [...byId.values()].sort((a, b) => b.studySec - a.studySec || a.name.localeCompare(b.name));
 }
