@@ -310,10 +310,16 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
   const [name, setName] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const submit = async () => {
     if (!name.trim() || creating) return;
+    if (!isSupabaseConfigured) {
+      setErrorMsg('Database is not connected. Please check your setup.');
+      return;
+    }
     setCreating(true);
+    setErrorMsg('');
     const { data, error } = await supabase.from('study_rooms').insert({
       name: name.trim(),
       owner_id: userId,
@@ -323,9 +329,10 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
       total_study_sec: 0,
       total_sessions: 0,
     }).select().single();
-    setCreating(false);
     if (error || !data) {
       console.error('Create room failed', error?.message);
+      setCreating(false);
+      setErrorMsg('Could not create the room. Please try again.');
       return;
     }
     await supabase.from('room_members').insert({
@@ -337,6 +344,7 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
       elapsed_sec: 0,
       is_online: true,
     });
+    setCreating(false);
     setName(''); setIsPrivate(false);
     onClose();
     onCreated(data.id);
@@ -352,6 +360,7 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
             <span className={`block w-5 h-5 rounded-full bg-white transition-transform ${isPrivate ? 'translate-x-4' : ''}`} />
           </span>
         </button>
+        {errorMsg && <p className="text-sm text-red-500 text-center font-semibold">{errorMsg}</p>}
         <GlassButton className="w-full" onClick={submit} disabled={!name.trim() || creating}>{creating ? 'Creating…' : 'Create & Join'}</GlassButton>
       </div>
     </Modal>
