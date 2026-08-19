@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Crown, TrendingUp, Users, Globe, Calendar, Flame, RefreshCw, Trophy } from 'lucide-react';
+import { Crown, TrendingUp, Users, Globe, Calendar, Flame, RefreshCw, Trophy, type LucideIcon } from 'lucide-react';
 import { GlassCard, Badge } from './ui';
 import { useStore, getRankings } from '../store';
 import { fmtHM } from '../hooks';
@@ -63,7 +63,7 @@ export function RankingsView() {
 
   const rankings = getRankings(scope, profile, remoteEntries);
 
-  const scopes: { value: RankingScope; label: string; icon: any }[] = [
+  const scopes: { value: RankingScope; label: string; icon: LucideIcon }[] = [
     { value: 'daily', label: 'Daily', icon: Calendar },
     { value: 'weekly', label: 'Weekly', icon: TrendingUp },
     { value: 'monthly', label: 'Monthly', icon: Calendar },
@@ -161,7 +161,7 @@ export function RankingsView() {
   );
 }
 
-function PodiumCard({ entry, place, height }: { entry: any; place: number; height: string }) {
+function PodiumCard({ entry, place, height }: { entry: ReturnType<typeof getRankings>[number]; place: number; height: string }) {
   const colors = ['#f54d1c', '#a8a8a8', '#cd7f32'];
   return (
     <div className="flex flex-col items-center gap-2 flex-1 max-w-[110px]">
