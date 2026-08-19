@@ -4,7 +4,7 @@ import { GlassCard, Badge } from './ui';
 import { useStore, getRankings } from '../store';
 import { fmtHM } from '../hooks';
 import type { RankingScope } from '../types';
-import { isSupabaseConfigured, supabase, type RoomMemberRow } from '../supabaseClient';
+import { isSupabaseConfigured, supabase, type GlobalLeaderboardRow } from '../supabaseClient';
 import { getTelegramUserId } from '../telegram';
 
 export function RankingsView() {
@@ -21,32 +21,23 @@ export function RankingsView() {
     }
     setLoading(true);
     setError('');
-    const { data, error: loadError } = await supabase.from('room_members').select('*');
+    const { data, error: loadError } = await supabase
+      .from('global_leaderboard')
+      .select('*')
+      .order('total_study_sec', { ascending: false });
     if (loadError) {
       setError('Ranking ma’lumotlarini yuklab bo‘lmadi.');
       setLoading(false);
       return;
     }
-    const grouped = new Map<string, RoomMemberRow>();
-    (data ?? []).forEach((member) => {
-      const previous = grouped.get(member.user_id);
-      if (previous) {
-        grouped.set(member.user_id, {
-          ...previous,
-          elapsed_sec: previous.elapsed_sec + member.elapsed_sec,
-        });
-      } else {
-        grouped.set(member.user_id, member);
-      }
-    });
-    setRemoteEntries([...grouped.values()].map((member) => ({
-      id: member.user_id,
-      name: member.user_name || 'Anonymous learner',
-      avatar: member.user_avatar || '🦉',
-      studySec: member.elapsed_sec,
-      sessions: 0,
-      isYou: member.user_id === (getTelegramUserId() ?? 'local-user'),
-      level: 1,
+    setRemoteEntries((data as GlobalLeaderboardRow[] | null ?? []).map((entry) => ({
+      id: entry.user_id,
+      name: entry.user_name || 'Anonymous learner',
+      avatar: entry.user_avatar || '🦉',
+      studySec: entry.total_study_sec,
+      sessions: entry.total_sessions,
+      isYou: entry.user_id === (getTelegramUserId() ?? 'local-user'),
+      level: entry.level,
     })));
     setLoading(false);
   };
@@ -55,8 +46,8 @@ export function RankingsView() {
     loadRankings();
     if (!isSupabaseConfigured) return;
     const channel = supabase
-      .channel('rankings_room_members')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, loadRankings)
+      .channel('global_leaderboard_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'global_leaderboard' }, loadRankings)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, []);

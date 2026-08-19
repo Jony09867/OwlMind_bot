@@ -369,6 +369,21 @@ export const store = {
       }).then(() => {});
     }
 
+    if (isSupabaseConfigured) {
+      const p = state.profile;
+      supabase.from('global_leaderboard').upsert({
+        user_id: getTelegramUserId() ?? 'local-user',
+        user_name: p.name,
+        user_avatar: p.avatar,
+        total_study_sec: p.totalStudySec,
+        total_sessions: p.totalSessions,
+        level: p.level,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'user_id' }).then(({ error }) => {
+        if (error) console.error('Failed to sync global leaderboard', error.message);
+      });
+    }
+
     return result;
   },
 

@@ -61,3 +61,13 @@ export type RoomFileRow = {
   file_size: number;
   created_at: string;
 };
+
+export type GlobalLeaderboardRow = {
+  user_id: string;
+  user_name: string;
+  user_avatar: string;
+  total_study_sec: number;
+  total_sessions: number;
+  level: number;
+  updated_at: string;
+};
