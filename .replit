@@ -5,3 +5,8 @@ channel = "stable-25_05"
 
 [agent]
 expertMode = true
+
+[userenv]
+
+[userenv.shared]
+VITE_SUPABASE_URL = "[https://iugsjbyrgpgjuprubbbj.supabase.co]"
