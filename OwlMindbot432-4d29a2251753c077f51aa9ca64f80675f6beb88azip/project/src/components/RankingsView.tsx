@@ -21,6 +21,21 @@ export function RankingsView() {
     }
     setLoading(true);
     setError('');
+    const currentUserId = getTelegramUserId() ?? 'local-user';
+    const { error: syncError } = await supabase.from('global_leaderboard').upsert({
+      user_id: currentUserId,
+      user_name: profile.name,
+      user_avatar: profile.avatar,
+      total_study_sec: profile.totalStudySec,
+      total_sessions: profile.totalSessions,
+      level: profile.level,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+    if (syncError) {
+      setError('Global ranking jadvali sozlanmagan yoki unga yozish ruxsati yo‘q.');
+      setLoading(false);
+      return;
+    }
     const { data, error: loadError } = await supabase
       .from('global_leaderboard')
       .select('*')
@@ -36,7 +51,7 @@ export function RankingsView() {
       avatar: entry.user_avatar || '🦉',
       studySec: entry.total_study_sec,
       sessions: entry.total_sessions,
-      isYou: entry.user_id === (getTelegramUserId() ?? 'local-user'),
+      isYou: entry.user_id === currentUserId,
       level: entry.level,
     })));
     setLoading(false);
