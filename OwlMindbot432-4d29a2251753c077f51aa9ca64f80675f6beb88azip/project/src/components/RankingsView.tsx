@@ -1,20 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Crown, TrendingUp, Users, Globe, Calendar, Flame, RefreshCw, Trophy, type LucideIcon } from 'lucide-react';
 import { GlassCard, Badge } from './ui';
 import { useStore, getRankings } from '../store';
 import { fmtHM } from '../hooks';
 import type { RankingScope } from '../types';
-import { isSupabaseConfigured, supabase, type GlobalLeaderboardRow } from '../supabaseClient';
+import { isSupabaseConfigured, supabase, type GlobalLeaderboardRow, type RoomRow } from '../supabaseClient';
 import { getTelegramUserId } from '../telegram';
 
 export function RankingsView() {
   const profile = useStore((s) => s.profile);
   const [scope, setScope] = useState<RankingScope>('weekly');
   const [remoteEntries, setRemoteEntries] = useState<ReturnType<typeof getRankings>>([]);
+  const [roomRankings, setRoomRankings] = useState<RoomRow[]>([]);
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [error, setError] = useState('');
 
-  const loadRankings = async () => {
+  const loadRankings = useCallback(async () => {
     if (!isSupabaseConfigured) {
       setLoading(false);
       return;
@@ -36,15 +37,16 @@ export function RankingsView() {
       setLoading(false);
       return;
     }
-    const { data, error: loadError } = await supabase
-      .from('global_leaderboard')
-      .select('*')
-      .order('total_study_sec', { ascending: false });
+    const [{ data, error: loadError }, { data: roomData, error: roomError }] = await Promise.all([
+      supabase.from('global_leaderboard').select('*').order('total_study_sec', { ascending: false }),
+      supabase.from('study_rooms').select('*').order('total_study_sec', { ascending: false }),
+    ]);
     if (loadError) {
       setError('Ranking ma’lumotlarini yuklab bo‘lmadi.');
       setLoading(false);
       return;
     }
+    if (!roomError) setRoomRankings((roomData ?? []) as RoomRow[]);
     setRemoteEntries((data as GlobalLeaderboardRow[] | null ?? []).map((entry) => ({
       id: entry.user_id,
       name: entry.user_name || 'Anonymous learner',
@@ -55,7 +57,7 @@ export function RankingsView() {
       level: entry.level,
     })));
     setLoading(false);
-  };
+  }, [profile]);
 
   useEffect(() => {
     loadRankings();
@@ -63,9 +65,10 @@ export function RankingsView() {
     const channel = supabase
       .channel('global_leaderboard_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'global_leaderboard' }, loadRankings)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'study_rooms' }, loadRankings)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [loadRankings]);
 
   const rankings = getRankings(scope, profile, remoteEntries);
 
@@ -78,7 +81,9 @@ export function RankingsView() {
     { value: 'global', label: 'Global', icon: Globe },
   ];
 
+  const joinedRoomId = useStore((s) => s.joinedRoomId);
   const yourRank = rankings.findIndex((r) => r.isYou) + 1;
+  const yourRoomRank = joinedRoomId ? roomRankings.findIndex((room) => room.id === joinedRoomId) + 1 : 0;
   const top3 = rankings.slice(0, 3);
   const rest = rankings.slice(3);
 
@@ -86,7 +91,11 @@ export function RankingsView() {
     <div className="space-y-5 animate-fade-in pb-4">
       <header className="px-1">
         <h1 className="font-display text-3xl font-extrabold tracking-tight">Rankings</h1>
-        <p className="text-neutralt-500 dark:text-neutralt-400 text-sm mt-1">You’re #{yourRank} · {scope === 'global' ? 'all-time' : scope === 'seasonal' ? 'season' : scope}</p>
+        <p className="text-neutralt-500 dark:text-neutralt-400 text-sm mt-1">
+          {scope === 'room'
+            ? (yourRoomRank ? `Your team is #${yourRoomRank} · ${roomRankings.length} rooms` : 'Join a room to see your team rank')
+            : `You’re #${yourRank} · ${scope === 'global' ? 'all-time' : scope === 'seasonal' ? 'season' : scope}`}
+        </p>
       </header>
 
       <div className="flex gap-2 overflow-x-auto scrollbar-hide -mx-1 px-1 pb-1">
@@ -117,6 +126,10 @@ export function RankingsView() {
         </GlassCard>
       )}
 
+      {scope === 'room' ? (
+        <RoomsRankingSection rooms={roomRankings} joinedRoomId={joinedRoomId} loading={loading} />
+      ) : (
+      <>
       {loading && <p className="text-sm text-neutralt-500 text-center py-3">Updating rankings…</p>}
       {error && (
         <GlassCard subtle className="p-3 flex items-center justify-between gap-3">
@@ -163,6 +176,48 @@ export function RankingsView() {
           </GlassCard>
         ))}
       </div>
+      </>
+      )}
+    </div>
+  );
+}
+
+function RoomsRankingSection({ rooms, joinedRoomId, loading }: { rooms: RoomRow[]; joinedRoomId: string | null; loading: boolean }) {
+  if (loading) return <p className="text-sm text-neutralt-500 text-center py-8">Updating rooms ranking…</p>;
+  if (rooms.length === 0) {
+    return (
+      <GlassCard subtle className="p-5 text-center">
+        <Users size={22} className="mx-auto text-accent mb-2" />
+        <p className="font-semibold text-sm">No study teams yet</p>
+        <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1">Create or join a room to compete as a team.</p>
+      </GlassCard>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <GlassCard subtle className="p-4">
+        <p className="font-semibold text-sm">Rooms Rank</p>
+        <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1">Teams compete by their combined study time.</p>
+      </GlassCard>
+      {rooms.map((room, index) => (
+        <GlassCard key={room.id} className={`p-3.5 flex items-center gap-3 ${room.id === joinedRoomId ? 'ring-2 ring-accent/40' : ''}`}>
+          <span className="w-7 text-center font-bold text-neutralt-500 dark:text-neutralt-400">{index + 1}</span>
+          <div className="w-10 h-10 rounded-2xl bg-accent/15 flex items-center justify-center">
+            <Users size={18} className="text-accent" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm flex items-center gap-1.5 truncate">
+              {room.name}
+              {room.id === joinedRoomId && <Badge color="accent">Your team</Badge>}
+            </p>
+            <p className="text-xs text-neutralt-500 dark:text-neutralt-400 truncate">{room.owner_name} · {room.total_sessions} sessions</p>
+          </div>
+          <div className="text-right">
+            <p className="font-bold text-sm tabular-nums">{fmtHM(room.total_study_sec)}</p>
+            <p className="text-[10px] text-neutralt-500 dark:text-neutralt-400">combined time</p>
+          </div>
+        </GlassCard>
+      ))}
     </div>
   );
 }
