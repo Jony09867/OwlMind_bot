@@ -23,28 +23,34 @@ export function RankingsView() {
     }
     setLoading(true);
     setError('');
-    const currentUserId = getTelegramUserId() ?? 'local-user';
-    const [{ data, error: loadError }, { data: roomData, error: roomError }] = await Promise.all([
-      supabase.from('users').select('*').order('study_time', { ascending: false }),
-      supabase.from('rooms').select('*').order('total_study_sec', { ascending: false }),
-    ]);
-    if (loadError) {
+    try {
+      const currentUserId = getTelegramUserId() ?? 'local-user';
+      const [{ data, error: loadError }, { data: roomData, error: roomError }] = await Promise.all([
+        supabase.from('users').select('*').order('study_time', { ascending: false }),
+        supabase.from('rooms').select('*').order('total_study_sec', { ascending: false }),
+      ]);
+      if (loadError) {
+        setError('Ranking ma’lumotlarini yuklab bo‘lmadi.');
+        setLoading(false);
+        return;
+      }
+      if (!roomError) setRoomRankings((roomData ?? []) as RoomRow[]);
+      setRemoteEntries((data as UserRow[] | null ?? []).map((entry) => ({
+        id: entry.id,
+        name: entry.first_name || entry.username || 'Anonymous learner',
+        avatar: '🦉',
+        studySec: entry.study_time,
+        sessions: entry.total_sessions,
+        isYou: entry.id === currentUserId,
+        level: entry.level,
+      })));
+      setLoading(false);
+    } catch (cause) {
+      console.error('Failed to load rankings', cause);
       setError('Ranking ma’lumotlarini yuklab bo‘lmadi.');
       setLoading(false);
-      return;
     }
-    if (!roomError) setRoomRankings((roomData ?? []) as RoomRow[]);
-    setRemoteEntries((data as UserRow[] | null ?? []).map((entry) => ({
-      id: entry.id,
-      name: entry.first_name || entry.username || 'Anonymous learner',
-      avatar: '🦉',
-      studySec: entry.study_time,
-      sessions: entry.total_sessions,
-      isYou: entry.id === currentUserId,
-      level: entry.level,
-    })));
-    setLoading(false);
-  }, [profile]);
+  }, []);
 
   useEffect(() => {
     loadRankings();

@@ -4,7 +4,7 @@ import { GlassCard, GlassButton, Badge, Modal, EmptyState } from './ui';
 import { store, useStore } from '../store';
 import { fmtHM } from '../hooks';
 import { isSupabaseConfigured, supabase, type RoomRow, type RoomMemberRow, type RoomMessageRow, type RoomFileRow } from '../supabaseClient';
-import { generateRoomCode } from '../lib/supabase';
+import { generateRoomCode, upsertTelegramUser } from '../lib/supabase';
 import { getTelegramUserId, getTelegramUserName } from '../telegram';
 
 type Tab = 'rooms' | 'chat' | 'files';
@@ -17,6 +17,7 @@ export function StudyRoomsView() {
   const [memberCounts, setMemberCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showJoin, setShowJoin] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [tab, setTab] = useState<Tab>('rooms');
 
@@ -195,7 +196,10 @@ export function StudyRoomsView() {
           <h1 className="font-display text-3xl font-extrabold tracking-tight">Study Rooms</h1>
           <p className="text-neutralt-500 dark:text-neutralt-400 text-sm mt-1">Study together with friends.</p>
         </div>
-        <GlassButton icon={Plus} onClick={() => setShowCreate(true)}>Create</GlassButton>
+         <div className="flex gap-2">
+           <GlassButton size="sm" variant="neutral" icon={UserPlus} onClick={() => setShowJoin(true)}>Join</GlassButton>
+           <GlassButton size="sm" icon={Plus} onClick={() => setShowCreate(true)}>Create</GlassButton>
+         </div>
       </header>
 
       {joinedRoom && (
@@ -207,6 +211,7 @@ export function StudyRoomsView() {
                 <Badge color="green"><Radio size={10} /> Live</Badge>
                 {joinedRoom.is_private && <Lock size={12} className="text-neutralt-400" />}
               </div>
+              <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1">Room code: <span className="font-bold tracking-widest">{joinedRoom.room_code}</span></p>
               <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5">
                 {members.filter((m) => m.is_online).length} online · {members.length} members
               </p>
@@ -292,6 +297,7 @@ export function StudyRoomsView() {
       </div>
 
       <CreateRoomModal open={showCreate} onClose={() => setShowCreate(false)} userId={userId} userName={userName} userAvatar={userAvatar} onCreated={handleCreated} />
+      <JoinRoomModal open={showJoin} onClose={() => setShowJoin(false)} onJoin={handleJoin} />
       <InviteModal open={showInvite} onClose={() => setShowInvite(false)} roomId={joinedRoomId} userId={userId} />
     </div>
   );
@@ -307,7 +313,7 @@ function RoomCard({ room, joined, memberCount, onJoin }: { room: RoomRow; joined
             {room.is_private && <Lock size={14} className="text-neutralt-400" />}
           </div>
           <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5 flex items-center gap-1">
-            <Crown size={11} /> {room.owner_name} · {memberCount} members
+            <Crown size={11} /> {room.owner_name} · {memberCount} members · <span className="font-bold tracking-wider">{room.room_code}</span>
           </p>
         </div>
         {!joined && (
@@ -321,6 +327,53 @@ function RoomCard({ room, joined, memberCount, onJoin }: { room: RoomRow; joined
         <span className="text-xs text-neutralt-500 dark:text-neutralt-400">{room.total_sessions} sessions</span>
       </div>
     </GlassCard>
+  );
+}
+
+function JoinRoomModal({ open, onClose, onJoin }: { open: boolean; onClose: () => void; onJoin: (roomId: string) => Promise<void> }) {
+  const [code, setCode] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const submit = async () => {
+    const normalized = code.trim().toUpperCase();
+    if (!normalized || loading) return;
+    setLoading(true);
+    setErrorMsg('');
+    try {
+      const { data, error } = await supabase.from('rooms').select('id').eq('room_code', normalized).maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!data) throw new Error('Room not found');
+      await onJoin(data.id);
+      setCode('');
+      onClose();
+    } catch (cause) {
+      console.error('Join room by code failed', cause);
+      setErrorMsg(cause instanceof Error && cause.message === 'Room not found' ? 'Room code topilmadi.' : 'Room’ga qo‘shilib bo‘lmadi.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Join a Study Room">
+      <div className="space-y-4">
+        <p className="text-sm text-neutralt-500 dark:text-neutralt-400">Do‘stingiz yuborgan room kodini kiriting.</p>
+        <input
+          autoFocus
+          value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          onKeyDown={(e) => e.key === 'Enter' && submit()}
+          maxLength={6}
+          placeholder="ABC123"
+          className="w-full glass-subtle rounded-2xl px-4 py-3 font-bold tracking-[0.3em] uppercase outline-none focus:ring-2 ring-accent/40 bg-transparent"
+        />
+        {errorMsg && <p className="text-sm text-red-500 text-center font-semibold">{errorMsg}</p>}
+        <GlassButton className="w-full" onClick={submit} disabled={code.trim().length < 6 || loading}>
+          {loading ? 'Joining…' : 'Join room'}
+        </GlassButton>
+      </div>
+    </Modal>
   );
 }
 
@@ -338,42 +391,51 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
     }
     setCreating(true);
     setErrorMsg('');
-    const { data, error } = await supabase.from('rooms').insert({
-      name: name.trim(),
-      owner_id: userId,
-      owner_name: userName,
-      room_code: generateRoomCode(),
-      is_private: isPrivate,
-      subject: 'Study',
-      total_study_sec: 0,
-      total_sessions: 0,
-    }).select().single();
-    if (error || !data) {
-      console.error('Create room failed', error?.message);
+    try {
+      const telegramUser = window.Telegram?.WebApp?.initDataUnsafe?.user;
+      if (telegramUser) {
+        const { error: userError } = await upsertTelegramUser({
+          id: userId,
+          first_name: telegramUser.first_name || userName,
+          username: telegramUser.username ?? null,
+          photo_url: telegramUser.photo_url ?? null,
+        });
+        if (userError) throw userError;
+      }
+      const { data, error } = await supabase.from('rooms').insert({
+        name: name.trim(),
+        owner_id: userId,
+        owner_name: userName,
+        room_code: generateRoomCode(),
+        is_private: isPrivate,
+        subject: 'Study',
+        total_study_sec: 0,
+        total_sessions: 0,
+      }).select().single();
+      if (error || !data) throw new Error(error?.message || 'Could not create room');
+
+      const { error: memberError } = await supabase.from('room_participants').insert({
+        room_id: data.id,
+        user_id: userId,
+        user_name: userName,
+        user_avatar: userAvatar,
+        subject: 'Study',
+        elapsed_sec: 0,
+        is_online: true,
+      });
+      if (memberError) {
+        await supabase.from('rooms').delete().eq('id', data.id);
+        throw new Error(memberError.message);
+      }
       setCreating(false);
-      setErrorMsg('Could not create the room. Please try again.');
-      return;
-    }
-    const { error: memberError } = await supabase.from('room_participants').insert({
-      room_id: data.id,
-      user_id: userId,
-      user_name: userName,
-      user_avatar: userAvatar,
-      subject: 'Study',
-      elapsed_sec: 0,
-      is_online: true,
-    });
-    if (memberError) {
-      console.error('Create room member failed', memberError.message);
-      await supabase.from('rooms').delete().eq('id', data.id);
+      setName(''); setIsPrivate(false);
+      onClose();
+      onCreated(data as RoomRow);
+    } catch (cause) {
+      console.error('Create room failed', cause);
       setCreating(false);
-      setErrorMsg('Room yaratildi, lekin unga qo‘shib bo‘lmadi. RLS siyosatlarini tekshiring.');
-      return;
+      setErrorMsg('Room yaratib bo‘lmadi. Supabase jadvallari va RLS sozlamalarini tekshiring.');
     }
-    setCreating(false);
-    setName(''); setIsPrivate(false);
-    onClose();
-    onCreated(data as RoomRow);
   };
 
   return (

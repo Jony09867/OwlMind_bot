@@ -419,13 +419,13 @@ export const store = {
     if (isSupabaseConfigured && state.joinedRoomId) {
       const uid = getTelegramUserId() ?? 'local-user';
       supabase
-        .from('room_members')
+        .from('room_participants')
         .update({ subject, elapsed_sec: elapsedSec, is_online: true })
         .eq('room_id', state.joinedRoomId)
         .eq('user_id', uid)
         .then(() => {});
       supabase
-        .from('study_rooms')
+        .from('rooms')
         .update({ total_study_sec: state.rooms.find((r) => r.id === state.joinedRoomId)?.totalStudySec ?? 0 })
         .eq('id', state.joinedRoomId)
         .then(() => {});
