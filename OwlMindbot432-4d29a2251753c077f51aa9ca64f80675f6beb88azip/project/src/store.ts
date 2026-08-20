@@ -19,6 +19,8 @@ import {
 } from './types';
 import { getTelegramUserId } from './telegram';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
+import { getTelegramUser } from './telegram';
+import { syncUserStudyStats } from './lib/supabase';
 
 export type TimerState = {
   isRunning: boolean;
@@ -370,18 +372,13 @@ export const store = {
     }
 
     if (isSupabaseConfigured) {
-      const p = state.profile;
-      supabase.from('global_leaderboard').upsert({
-        user_id: getTelegramUserId() ?? 'local-user',
-        user_name: p.name,
-        user_avatar: p.avatar,
-        total_study_sec: p.totalStudySec,
-        total_sessions: p.totalSessions,
-        level: p.level,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'user_id' }).then(({ error }) => {
-        if (error) console.error('Failed to sync global leaderboard', error.message);
-      });
+      const telegramUser = getTelegramUser();
+      if (telegramUser) {
+        const p = state.profile;
+        syncUserStudyStats(telegramUser, p.totalStudySec, p.totalSessions, p.level).then(({ error }) => {
+          if (error) console.error('Failed to sync user study stats', error.message);
+        });
+      }
     }
 
     return result;

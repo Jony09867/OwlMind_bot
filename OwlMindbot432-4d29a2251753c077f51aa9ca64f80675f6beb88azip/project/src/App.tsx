@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Timer, ListTodo, Calendar, Users, Trophy, User, Flame } from 'lucide-react';
 import { FocusView } from './components/FocusView';
 import { TasksView } from './components/TasksView';
@@ -10,7 +10,8 @@ import { TimerWidget } from './components/TimerWidget';
 import { OnboardingModal } from './components/OnboardingModal';
 import { useTheme } from './hooks';
 import { useStore } from './store';
-import { initTelegram } from './telegram';
+import { getTelegramUser, initTelegram } from './telegram';
+import { isSupabaseConfigured, upsertTelegramUser } from './lib/supabase';
 
 type Tab = 'focus' | 'tasks' | 'schedule' | 'rooms' | 'rankings' | 'profile';
 
@@ -26,6 +27,13 @@ const TABS: { id: Tab; label: string; icon: any }[] = [
 export default function App() {
   useTheme();
   initTelegram();
+  useEffect(() => {
+    const telegramUser = getTelegramUser();
+    if (!telegramUser || !isSupabaseConfigured) return;
+    upsertTelegramUser(telegramUser).then(({ error }) => {
+      if (error) console.error('Failed to sync Telegram user', error.message);
+    });
+  }, []);
   const [tab, setTab] = useState<Tab>('focus');
   const streak = useStore((s) => s.profile.currentStreak);
 

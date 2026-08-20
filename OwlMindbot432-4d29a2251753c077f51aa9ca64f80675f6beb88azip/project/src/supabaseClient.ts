@@ -1,25 +1,11 @@
-import { createClient } from '@supabase/supabase-js';
-
-const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
-const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
-
-// Supabase is optional for the local/offline parts of the mini app. Do not let
-// a missing Vercel environment variable prevent React from mounting.
-export const isSupabaseConfigured = Boolean(url && anonKey);
-
-export const supabase = createClient(
-  url || 'https://placeholder.supabase.co',
-  anonKey || 'placeholder-anon-key',
-  {
-  auth: { persistSession: false, autoRefreshToken: false },
-  },
-);
+export { isSupabaseConfigured, supabase } from './lib/supabase';
 
 export type RoomRow = {
   id: string;
   name: string;
   owner_id: string;
   owner_name: string;
+  room_code: string;
   is_private: boolean;
   subject: string;
   total_study_sec: number;
@@ -71,3 +57,5 @@ export type GlobalLeaderboardRow = {
   level: number;
   updated_at: string;
 };
+
+export type { UserRow } from './lib/supabase';

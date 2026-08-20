@@ -4,7 +4,8 @@ import { GlassCard, Badge } from './ui';
 import { useStore, getRankings } from '../store';
 import { fmtHM } from '../hooks';
 import type { RankingScope } from '../types';
-import { isSupabaseConfigured, supabase, type GlobalLeaderboardRow, type RoomRow } from '../supabaseClient';
+import { isSupabaseConfigured, supabase, type RoomRow } from '../supabaseClient';
+import type { UserRow } from '../lib/supabase';
 import { getTelegramUserId } from '../telegram';
 
 export function RankingsView() {
@@ -23,23 +24,9 @@ export function RankingsView() {
     setLoading(true);
     setError('');
     const currentUserId = getTelegramUserId() ?? 'local-user';
-    const { error: syncError } = await supabase.from('global_leaderboard').upsert({
-      user_id: currentUserId,
-      user_name: profile.name,
-      user_avatar: profile.avatar,
-      total_study_sec: profile.totalStudySec,
-      total_sessions: profile.totalSessions,
-      level: profile.level,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'user_id' });
-    if (syncError) {
-      setError('Global ranking jadvali sozlanmagan yoki unga yozish ruxsati yo‘q.');
-      setLoading(false);
-      return;
-    }
     const [{ data, error: loadError }, { data: roomData, error: roomError }] = await Promise.all([
-      supabase.from('global_leaderboard').select('*').order('total_study_sec', { ascending: false }),
-      supabase.from('study_rooms').select('*').order('total_study_sec', { ascending: false }),
+      supabase.from('users').select('*').order('study_time', { ascending: false }),
+      supabase.from('rooms').select('*').order('total_study_sec', { ascending: false }),
     ]);
     if (loadError) {
       setError('Ranking ma’lumotlarini yuklab bo‘lmadi.');
@@ -47,13 +34,13 @@ export function RankingsView() {
       return;
     }
     if (!roomError) setRoomRankings((roomData ?? []) as RoomRow[]);
-    setRemoteEntries((data as GlobalLeaderboardRow[] | null ?? []).map((entry) => ({
-      id: entry.user_id,
-      name: entry.user_name || 'Anonymous learner',
-      avatar: entry.user_avatar || '🦉',
-      studySec: entry.total_study_sec,
+    setRemoteEntries((data as UserRow[] | null ?? []).map((entry) => ({
+      id: entry.id,
+      name: entry.first_name || entry.username || 'Anonymous learner',
+      avatar: '🦉',
+      studySec: entry.study_time,
       sessions: entry.total_sessions,
-      isYou: entry.user_id === currentUserId,
+      isYou: entry.id === currentUserId,
       level: entry.level,
     })));
     setLoading(false);
@@ -63,9 +50,9 @@ export function RankingsView() {
     loadRankings();
     if (!isSupabaseConfigured) return;
     const channel = supabase
-      .channel('global_leaderboard_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'global_leaderboard' }, loadRankings)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'study_rooms' }, loadRankings)
+      .channel('users_and_rooms_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, loadRankings)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, loadRankings)
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [loadRankings]);

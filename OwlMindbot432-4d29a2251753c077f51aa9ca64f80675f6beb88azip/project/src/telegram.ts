@@ -57,6 +57,21 @@ export function getTelegramUserName(): string | null {
   }
 }
 
+export function getTelegramUser(): { id: string; first_name: string; username: string | null; photo_url: string | null } | null {
+  try {
+    const u = window.Telegram?.WebApp?.initDataUnsafe?.user;
+    if (!u) return null;
+    return {
+      id: String(u.id),
+      first_name: u.first_name || u.username || 'Telegram User',
+      username: u.username ?? null,
+      photo_url: u.photo_url ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function initTelegram(): void {
   try {
     window.Telegram?.WebApp?.ready();

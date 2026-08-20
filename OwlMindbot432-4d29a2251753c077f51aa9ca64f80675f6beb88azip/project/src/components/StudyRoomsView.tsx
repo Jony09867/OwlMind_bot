@@ -4,6 +4,7 @@ import { GlassCard, GlassButton, Badge, Modal, EmptyState } from './ui';
 import { store, useStore } from '../store';
 import { fmtHM } from '../hooks';
 import { isSupabaseConfigured, supabase, type RoomRow, type RoomMemberRow, type RoomMessageRow, type RoomFileRow } from '../supabaseClient';
+import { generateRoomCode } from '../lib/supabase';
 import { getTelegramUserId, getTelegramUserName } from '../telegram';
 
 type Tab = 'rooms' | 'chat' | 'files';
@@ -35,7 +36,7 @@ export function StudyRoomsView() {
     const loadRooms = async () => {
       setLoading(true);
       const { data, error } = await supabase
-        .from('study_rooms')
+        .from('rooms')
         .select('*')
         .order('created_at', { ascending: false });
       if (!active) return;
@@ -50,7 +51,7 @@ export function StudyRoomsView() {
 
     const loadCounts = async () => {
       const { data, error } = await supabase
-        .from('room_members')
+        .from('room_participants')
         .select('room_id');
       if (!active || error || !data) return;
       const counts: Record<string, number> = {};
@@ -64,9 +65,9 @@ export function StudyRoomsView() {
     loadCounts();
 
     const channel = supabase
-      .channel('study_rooms_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'study_rooms' }, () => loadRooms())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members' }, () => loadCounts())
+      .channel('rooms_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => loadRooms())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_participants' }, () => loadCounts())
       .subscribe();
 
     return () => {
@@ -85,7 +86,7 @@ export function StudyRoomsView() {
     let active = true;
     const loadMembers = async () => {
       const { data, error } = await supabase
-        .from('room_members')
+        .from('room_participants')
         .select('*')
         .eq('room_id', joinedRoomId)
         .order('joined_at', { ascending: true });
@@ -95,7 +96,7 @@ export function StudyRoomsView() {
 
     const markOnline = async () => {
       await supabase
-        .from('room_members')
+        .from('room_participants')
         .update({ is_online: true })
         .eq('room_id', joinedRoomId)
         .eq('user_id', userId);
@@ -105,13 +106,13 @@ export function StudyRoomsView() {
     markOnline();
 
     const channel = supabase
-      .channel(`room_members_${joinedRoomId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_members', filter: `room_id=eq.${joinedRoomId}` }, () => loadMembers())
+      .channel(`room_participants_${joinedRoomId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_participants', filter: `room_id=eq.${joinedRoomId}` }, () => loadMembers())
       .subscribe();
 
     const onUnload = () => {
       supabase
-        .from('room_members')
+        .from('room_participants')
         .update({ is_online: false })
         .eq('room_id', joinedRoomId!)
         .eq('user_id', userId);
@@ -131,7 +132,7 @@ export function StudyRoomsView() {
   const handleJoin = async (roomId: string) => {
     if (!isSupabaseConfigured || joinedRoomId === roomId) return;
     const { data: existingMember, error: memberLookupError } = await supabase
-      .from('room_members')
+      .from('room_participants')
       .select('id')
       .eq('room_id', roomId)
       .eq('user_id', userId)
@@ -141,7 +142,7 @@ export function StudyRoomsView() {
       return;
     }
     if (!existingMember) {
-      const { error } = await supabase.from('room_members').insert({
+      const { error } = await supabase.from('room_participants').insert({
         room_id: roomId,
         user_id: userId,
         user_name: userName,
@@ -156,7 +157,7 @@ export function StudyRoomsView() {
       }
     } else {
       const { error } = await supabase
-        .from('room_members')
+        .from('room_participants')
         .update({ is_online: true, user_name: userName, user_avatar: userAvatar })
         .eq('room_id', roomId)
         .eq('user_id', userId);
@@ -172,7 +173,7 @@ export function StudyRoomsView() {
   const handleLeave = async () => {
     if (!joinedRoomId) return;
     await supabase
-      .from('room_members')
+      .from('room_participants')
       .update({ is_online: false })
       .eq('room_id', joinedRoomId)
       .eq('user_id', userId);
@@ -337,10 +338,11 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
     }
     setCreating(true);
     setErrorMsg('');
-    const { data, error } = await supabase.from('study_rooms').insert({
+    const { data, error } = await supabase.from('rooms').insert({
       name: name.trim(),
       owner_id: userId,
       owner_name: userName,
+      room_code: generateRoomCode(),
       is_private: isPrivate,
       subject: 'Study',
       total_study_sec: 0,
@@ -352,7 +354,7 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
       setErrorMsg('Could not create the room. Please try again.');
       return;
     }
-    const { error: memberError } = await supabase.from('room_members').insert({
+    const { error: memberError } = await supabase.from('room_participants').insert({
       room_id: data.id,
       user_id: userId,
       user_name: userName,
@@ -363,7 +365,7 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
     });
     if (memberError) {
       console.error('Create room member failed', memberError.message);
-      await supabase.from('study_rooms').delete().eq('id', data.id);
+      await supabase.from('rooms').delete().eq('id', data.id);
       setCreating(false);
       setErrorMsg('Room yaratildi, lekin unga qo‘shib bo‘lmadi. RLS siyosatlarini tekshiring.');
       return;
