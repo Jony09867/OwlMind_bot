@@ -10,7 +10,7 @@ import { TimerWidget } from './components/TimerWidget';
 import { OnboardingModal } from './components/OnboardingModal';
 import { useTheme } from './hooks';
 import { useStore } from './store';
-import { getTelegramUser, initTelegram } from './telegram';
+import { getTelegramStartParam, getTelegramUser, initTelegram } from './telegram';
 import { isSupabaseConfigured, upsertTelegramUser } from './lib/supabase';
 
 type Tab = 'focus' | 'tasks' | 'schedule' | 'rooms' | 'rankings' | 'profile';
@@ -34,7 +34,11 @@ export default function App() {
       if (error) console.error('Failed to sync Telegram user', error.message);
     });
   }, []);
-  const [tab, setTab] = useState<Tab>('focus');
+  const [tab, setTab] = useState<Tab>(() => {
+    const joinParam = new URLSearchParams(window.location.search).get('join');
+    const startParam = getTelegramStartParam();
+    return joinParam || startParam?.startsWith('room_') ? 'rooms' : 'focus';
+  });
   const streak = useStore((s) => s.profile.currentStreak);
 
   const startFocusFromBlock = (_subject: string) => {
