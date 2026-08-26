@@ -5,6 +5,7 @@ declare global {
       WebApp: {
         initData: string;
         initDataUnsafe: {
+          start_param?: string;
           user?: {
             id: number;
             first_name?: string;
@@ -16,6 +17,8 @@ declare global {
         ready: () => void;
         expand: () => void;
         close: () => void;
+        openTelegramLink?: (url: string) => void;
+        openLink?: (url: string) => void;
         themeParams: Record<string, string>;
         colorScheme: 'light' | 'dark';
         MainButton: {
@@ -72,6 +75,14 @@ export function getTelegramUser(): { id: string; first_name: string; username: s
   }
 }
 
+export function getTelegramStartParam(): string | null {
+  try {
+    return window.Telegram?.WebApp?.initDataUnsafe?.start_param ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export function initTelegram(): void {
   try {
     window.Telegram?.WebApp?.ready();
@@ -83,6 +94,18 @@ export function hapticImpact(style: 'light' | 'medium' | 'heavy' = 'light'): voi
   try {
     window.Telegram?.WebApp?.HapticFeedback?.impactOccurred(style);
   } catch {}
+}
+
+export function openTelegramLink(url: string): void {
+  try {
+    if (window.Telegram?.WebApp?.openTelegramLink) {
+      window.Telegram.WebApp.openTelegramLink(url);
+      return;
+    }
+    window.open(url, '_blank', 'noopener,noreferrer');
+  } catch {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
 }
 
 export {};
