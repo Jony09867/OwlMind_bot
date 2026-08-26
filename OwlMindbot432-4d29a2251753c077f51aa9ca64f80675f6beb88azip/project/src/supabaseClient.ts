@@ -3,6 +3,7 @@ export { isSupabaseConfigured, supabase } from './lib/supabase';
 export type RoomRow = {
   id: string;
   name: string;
+  description: string;
   owner_id: string;
   owner_name: string;
   room_code: string;
@@ -20,9 +21,12 @@ export type RoomMemberRow = {
   user_name: string;
   user_avatar: string;
   subject: string;
+  role: 'owner' | 'admin' | 'member';
   elapsed_sec: number;
   is_online: boolean;
   joined_at: string;
+  last_opened_at: string;
+  last_read_at: string;
 };
 
 export type RoomMessageRow = {
