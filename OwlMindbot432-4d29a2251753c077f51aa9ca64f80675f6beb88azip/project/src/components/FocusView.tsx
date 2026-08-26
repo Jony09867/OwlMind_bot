@@ -355,6 +355,24 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
     },
   });
 
+  useEffect(() => {
+    if (!joinedRoomId) return;
+    if (engine.running) {
+      if (phase === 'focus') void setRoomFocusRunning(joinedRoomId, subject, 'pomodoro', engine.elapsed);
+      else void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', 0);
+    } else if (engine.elapsed > 0) {
+      void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', phase === 'focus' ? engine.elapsed : 0);
+    }
+    // Only resync when the active room changes; timer ticks must stay local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  useEffect(() => () => {
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+    // Clear stale live state if this timer mode is unmounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
   const startTimer = () => {
     engine.start();
     if (!joinedRoomId) return;
@@ -448,6 +466,20 @@ function StopwatchTimer({ subject, category, onComplete }: { subject: string; ca
   const joinedRoomId = useStore((s) => s.joinedRoomId);
   const engine = useTimerEngine({ durationSec: null, onComplete: () => {} });
 
+  useEffect(() => {
+    if (!joinedRoomId) return;
+    if (engine.running) void setRoomFocusRunning(joinedRoomId, subject, 'stopwatch', engine.elapsed);
+    else if (engine.elapsed > 0) void setRoomFocusPaused(joinedRoomId, subject, 'stopwatch', engine.elapsed);
+    // Only resync when the active room changes; timer ticks must stay local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  useEffect(() => () => {
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+    // Clear stale live state if this timer mode is unmounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
   const startTimer = () => {
     engine.start();
     if (joinedRoomId) void setRoomFocusRunning(joinedRoomId, subject, 'stopwatch', engine.elapsed);
@@ -465,7 +497,10 @@ function StopwatchTimer({ subject, category, onComplete }: { subject: string; ca
 
   const handleEnd = () => {
     const total = Math.floor(engine.elapsed);
-    if (total < 10) return;
+    if (total < 10) {
+      resetTimer();
+      return;
+    }
     const result = store.completeSession({ type: 'stopwatch', subject, category, durationSec: total, pomodoroCount: 0, roomId: joinedRoomId });
     onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements);
     if (joinedRoomId) {
@@ -517,6 +552,20 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
       engine.reset();
     },
   });
+
+  useEffect(() => {
+    if (!joinedRoomId) return;
+    if (engine.running) void setRoomFocusRunning(joinedRoomId, subject, 'deep', engine.elapsed);
+    else if (engine.elapsed > 0) void setRoomFocusPaused(joinedRoomId, subject, 'deep', engine.elapsed);
+    // Only resync when the active room changes; timer ticks must stay local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  useEffect(() => () => {
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+    // Clear stale live state if this timer mode is unmounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
 
   const startTimer = () => {
     engine.start();
