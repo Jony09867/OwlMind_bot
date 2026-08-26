@@ -3,7 +3,7 @@ import { Timer, ListTodo, Calendar, Users, Trophy, User, Flame } from 'lucide-re
 import { FocusView } from './components/FocusView';
 import { TasksView } from './components/TasksView';
 import { ScheduleView } from './components/ScheduleView';
-import { StudyRoomsView } from './components/StudyRoomsView';
+import { RoomsSearchView } from './components/RoomsSearchView';
 import { RankingsView } from './components/RankingsView';
 import { ProfileView } from './components/ProfileView';
 import { TimerWidget } from './components/TimerWidget';
@@ -73,7 +73,7 @@ export default function App() {
         {tab === 'focus' && <FocusView />}
         {tab === 'tasks' && <TasksView />}
         {tab === 'schedule' && <ScheduleView onStartFocus={startFocusFromBlock} />}
-        {tab === 'rooms' && <StudyRoomsView />}
+        {tab === 'rooms' && <RoomsSearchView />}
         {tab === 'rankings' && <RankingsView />}
         {tab === 'profile' && <ProfileView />}
       </main>
