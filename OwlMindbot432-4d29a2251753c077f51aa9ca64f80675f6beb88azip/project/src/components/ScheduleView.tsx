@@ -2,13 +2,14 @@ import { useState } from 'react';
 import { Plus, Play, Bell, Trash2, Clock, Calendar } from 'lucide-react';
 import { GlassCard, GlassButton, Badge, Modal, EmptyState } from './ui';
 import { store, useStore } from '../store';
-import { fmtMin } from '../hooks';
+import { fmtHM, fmtMin } from '../hooks';
 import type { StudyBlock } from '../types';
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
-export function ScheduleView({ onStartFocus }: { onStartFocus: (subject: string) => void }) {
+export function ScheduleView({ onStartFocus }: { onStartFocus: (blockId: string) => void }) {
   const blocks = useStore((s) => s.blocks);
+  const sessions = useStore((s) => s.sessions);
   const [showAdd, setShowAdd] = useState(false);
 
   const todayIdx = (new Date().getDay() + 6) % 7;
@@ -16,6 +17,19 @@ export function ScheduleView({ onStartFocus }: { onStartFocus: (subject: string)
   const byDay: Record<number, StudyBlock[]> = {};
   blocks.forEach((b) => (byDay[b.day] ??= []).push(b));
   Object.values(byDay).forEach((arr) => arr.sort((a, b) => a.startMin - b.startMin));
+
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(now.getDate() - todayIdx);
+  const weekStartMs = weekStart.getTime();
+  const weekEndMs = weekStartMs + 7 * 86400000;
+
+  const studiedByBlock = sessions.reduce<Record<string, number>>((totals, session) => {
+    if (!session.scheduleBlockId || session.startedAt < weekStartMs || session.startedAt >= weekEndMs) return totals;
+    totals[session.scheduleBlockId] = (totals[session.scheduleBlockId] ?? 0) + session.durationSec;
+    return totals;
+  }, {});
 
   return (
     <div className="space-y-5 animate-fade-in pb-4">
@@ -56,7 +70,12 @@ export function ScheduleView({ onStartFocus }: { onStartFocus: (subject: string)
                 </p>
                 <div className="space-y-2">
                   {dayBlocks.map((b) => (
-                    <BlockRow key={b.id} block={b} onStart={() => onStartFocus(b.subject)} />
+                    <BlockRow
+                      key={b.id}
+                      block={b}
+                      studiedSec={studiedByBlock[b.id] ?? 0}
+                      onStart={() => onStartFocus(b.id)}
+                    />
                   ))}
                 </div>
               </div>
@@ -70,7 +89,10 @@ export function ScheduleView({ onStartFocus }: { onStartFocus: (subject: string)
   );
 }
 
-function BlockRow({ block, onStart }: { block: StudyBlock; onStart: () => void }) {
+function BlockRow({ block, studiedSec, onStart }: { block: StudyBlock; studiedSec: number; onStart: () => void }) {
+  const plannedSec = Math.max(0, block.endMin - block.startMin) * 60;
+  const completed = plannedSec > 0 && studiedSec >= plannedSec;
+
   return (
     <GlassCard className="p-3.5 flex items-center gap-3">
       <div className="shrink-0 w-1 h-12 rounded-full bg-accent" />
@@ -83,6 +105,14 @@ function BlockRow({ block, onStart }: { block: StudyBlock; onStart: () => void }
           <Badge color="neutral">{block.subject}</Badge>
           {block.reminder && <Badge color="amber"><Bell size={10} /> Reminder</Badge>}
         </div>
+        {studiedSec > 0 && (
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            <span className="text-[10px] font-semibold text-neutralt-500 dark:text-neutralt-400">
+              Studied {fmtHM(studiedSec)}{plannedSec > 0 ? ` / ${fmtHM(plannedSec)}` : ''}
+            </span>
+            {completed && <Badge color="green">Completed</Badge>}
+          </div>
+        )}
       </div>
       <button onClick={onStart} className="shrink-0 w-9 h-9 rounded-xl bg-accent text-white flex items-center justify-center glass-press liquid-shine">
         <Play size={16} />

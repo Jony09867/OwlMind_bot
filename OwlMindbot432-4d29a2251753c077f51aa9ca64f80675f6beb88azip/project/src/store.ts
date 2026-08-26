@@ -42,6 +42,7 @@ type State = {
   blocks: StudyBlock[];
   rooms: StudyRoom[];
   joinedRoomId: string | null;
+  activeScheduleBlockId: string | null;
   timer: TimerState | null;
   onboarded: boolean;
 };
@@ -153,6 +154,7 @@ function defaultState(): State {
     blocks: seedBlocks(),
     rooms: seedRooms(),
     joinedRoomId: null,
+    activeScheduleBlockId: null,
     timer: null,
     onboarded: false,
   };
@@ -174,6 +176,8 @@ function load(): State {
       sessions: parsed.sessions ?? base.sessions,
       blocks: parsed.blocks ?? base.blocks,
       rooms: parsed.rooms ?? base.rooms,
+      joinedRoomId: parsed.joinedRoomId ?? null,
+      activeScheduleBlockId: null,
       timer: parsed.timer ?? null,
       onboarded: parsed.onboarded ?? false,
     };
@@ -326,6 +330,9 @@ export const store = {
     pomodoroCount: number;
     roomId: string | null;
   }): { xpEarned: number; leveledUp: boolean; newAchievements: string[] } {
+    const scheduleBlock = state.activeScheduleBlockId
+      ? state.blocks.find((block) => block.id === state.activeScheduleBlockId) ?? null
+      : null;
     const xpEarned = Math.max(1, Math.floor(opts.durationSec / 60 / 5) * XP_RULES.sessionPer5Min);
     const session: FocusSession = {
       id: uid(),
@@ -338,6 +345,8 @@ export const store = {
       pomodoroCount: opts.pomodoroCount,
       xpEarned,
       roomId: opts.roomId,
+      scheduleBlockId: scheduleBlock?.id ?? null,
+      scheduleBlockTitle: scheduleBlock?.title ?? null,
     };
     let result = { xpEarned, leveledUp: false, newAchievements: [] as string[] };
 
@@ -360,7 +369,7 @@ export const store = {
       profile = recalcAchievements(profile, { ...s, sessions: [...s.sessions, session] });
       const afterAch = profile.achievements.filter((a) => a.unlocked).map((a) => a.id);
       result.newAchievements = afterAch.filter((id) => !beforeAch.includes(id));
-      return { ...s, profile, sessions: [...s.sessions, session] };
+      return { ...s, profile, sessions: [...s.sessions, session], activeScheduleBlockId: null };
     });
 
     if (isSupabaseConfigured && opts.roomId) {
@@ -402,7 +411,22 @@ export const store = {
   },
 
   deleteBlock(id: string): void {
-    setState((s) => ({ ...s, blocks: s.blocks.filter((b) => b.id !== id) }));
+    setState((s) => ({
+      ...s,
+      blocks: s.blocks.filter((b) => b.id !== id),
+      activeScheduleBlockId: s.activeScheduleBlockId === id ? null : s.activeScheduleBlockId,
+    }));
+  },
+
+  beginScheduleFocus(blockId: string): void {
+    setState((s) => ({
+      ...s,
+      activeScheduleBlockId: s.blocks.some((block) => block.id === blockId) ? blockId : null,
+    }));
+  },
+
+  cancelScheduleFocus(): void {
+    setState((s) => ({ ...s, activeScheduleBlockId: null }));
   },
 
   joinRoom(id: string): void {

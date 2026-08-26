@@ -151,16 +151,19 @@ export function FocusView() {
           <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-hide">
             {sessions.slice(-8).reverse().map((s) => (
               <div key={s.id} className="flex items-center justify-between glass-subtle rounded-xl px-3 py-2.5">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent-500 flex items-center justify-center">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-accent/15 text-accent-500 flex items-center justify-center shrink-0">
                     {s.type === 'pomodoro' ? <Timer size={16} /> : s.type === 'deep' ? <Brain size={16} /> : <Watch size={16} />}
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold">{s.subject}</p>
-                    <p className="text-xs text-neutralt-500 dark:text-neutralt-400">{new Date(s.startedAt).toLocaleDateString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</p>
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold truncate">{s.subject}</p>
+                    <p className="text-xs text-neutralt-500 dark:text-neutralt-400 truncate">
+                      {new Date(s.startedAt).toLocaleDateString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}
+                      {s.scheduleBlockId && ` · Schedule · ${s.scheduleBlockTitle || 'Study block'}`}
+                    </p>
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="text-right shrink-0">
                   <p className="text-sm font-bold">{fmtDuration(s.durationSec)}</p>
                   <p className="text-xs text-accent-500 font-semibold">+{s.xpEarned} XP</p>
                 </div>
@@ -395,6 +398,7 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
 
   const resetTimer = () => {
     engine.reset();
+    store.cancelScheduleFocus();
     if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
   };
 
@@ -411,6 +415,8 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
       });
       onComplete(total, pomodoroCount, result.xpEarned, result.leveledUp, result.newAchievements);
       if (joinedRoomId) store.updateRoomMemberStudy(subject, total);
+    } else {
+      store.cancelScheduleFocus();
     }
     if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
     setCompletedDuration(0);
@@ -492,6 +498,7 @@ function StopwatchTimer({ subject, category, onComplete }: { subject: string; ca
 
   const resetTimer = () => {
     engine.reset();
+    store.cancelScheduleFocus();
     if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
   };
 
@@ -579,6 +586,12 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
 
   const resetTimer = () => {
     engine.reset();
+    store.cancelScheduleFocus();
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+  };
+
+  const resetForTargetChange = () => {
+    engine.reset();
     if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
   };
 
@@ -604,7 +617,7 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
             key={m}
             onClick={() => {
               setTargetMin(m);
-              resetTimer();
+              resetForTargetChange();
             }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold glass-press transition-all ${targetMin === m ? 'bg-accent text-white' : 'glass-subtle'}`}
           >

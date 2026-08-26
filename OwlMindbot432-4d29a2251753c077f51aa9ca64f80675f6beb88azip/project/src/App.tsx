@@ -9,7 +9,7 @@ import { ProfileView } from './components/ProfileView';
 import { TimerWidget } from './components/TimerWidget';
 import { OnboardingModal } from './components/OnboardingModal';
 import { useTheme } from './hooks';
-import { useStore } from './store';
+import { store, useStore } from './store';
 import { getTelegramStartParam, getTelegramUser, initTelegram } from './telegram';
 import { isSupabaseConfigured, upsertTelegramUser } from './lib/supabase';
 
@@ -41,7 +41,8 @@ export default function App() {
   });
   const streak = useStore((s) => s.profile.currentStreak);
 
-  const startFocusFromBlock = (_subject: string) => {
+  const startFocusFromBlock = (blockId: string) => {
+    store.beginScheduleFocus(blockId);
     setTab('focus');
   };
 
