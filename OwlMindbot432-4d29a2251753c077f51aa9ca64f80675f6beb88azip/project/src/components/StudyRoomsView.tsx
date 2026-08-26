@@ -15,6 +15,7 @@ export function StudyRoomsView() {
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [members, setMembers] = useState<RoomMemberRow[]>([]);
   const [memberCounts, setMemberCounts] = useState<Record<string, number>>({});
+  const [memberRoomIds, setMemberRoomIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showJoin, setShowJoin] = useState(false);
@@ -25,7 +26,7 @@ export function StudyRoomsView() {
   const userName = profile.name && profile.name !== 'You' ? profile.name : (getTelegramUserName() ?? 'You');
   const userAvatar = profile.avatar || '🦉';
 
-  // Load all rooms + aggregate member counts.
+  // Load all rooms + aggregate member counts + this user's saved memberships.
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setLoading(false);
@@ -62,22 +63,35 @@ export function StudyRoomsView() {
       setMemberCounts(counts);
     };
 
+    const loadMyMemberships = async () => {
+      const { data, error } = await supabase
+        .from('room_participants')
+        .select('room_id')
+        .eq('user_id', userId);
+      if (!active || error || !data) return;
+      setMemberRoomIds(new Set(data.map((r: { room_id: string }) => r.room_id)));
+    };
+
     loadRooms();
     loadCounts();
+    loadMyMemberships();
 
     const channel = supabase
       .channel('rooms_changes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rooms' }, () => loadRooms())
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_participants' }, () => loadCounts())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_participants' }, () => {
+        loadCounts();
+        loadMyMemberships();
+      })
       .subscribe();
 
     return () => {
       active = false;
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [userId]);
 
-  // Load members for the joined room + keep this user online.
+  // Load members for the opened room + keep this user online while it is open.
   useEffect(() => {
     if (!joinedRoomId || !isSupabaseConfigured) {
       setMembers([]);
@@ -131,7 +145,14 @@ export function StudyRoomsView() {
   const joinedRoom = rooms.find((r) => r.id === joinedRoomId);
 
   const handleJoin = async (roomId: string) => {
-    if (!isSupabaseConfigured || joinedRoomId === roomId) return;
+    if (!isSupabaseConfigured) return;
+
+    // If this room is already open, just switch to the members tab.
+    if (joinedRoomId === roomId) {
+      setTab('rooms');
+      return;
+    }
+
     const { data: existingMember, error: memberLookupError } = await supabase
       .from('room_participants')
       .select('id')
@@ -142,6 +163,7 @@ export function StudyRoomsView() {
       console.error('Could not check room membership', memberLookupError.message);
       return;
     }
+
     if (!existingMember) {
       const { error } = await supabase.from('room_participants').insert({
         room_id: roomId,
@@ -156,6 +178,7 @@ export function StudyRoomsView() {
         console.error('Could not join room', error.message);
         return;
       }
+      setMemberRoomIds((current) => new Set(current).add(roomId));
     } else {
       const { error } = await supabase
         .from('room_participants')
@@ -163,10 +186,12 @@ export function StudyRoomsView() {
         .eq('room_id', roomId)
         .eq('user_id', userId);
       if (error) {
-        console.error('Could not update room membership', error.message);
+        console.error('Could not open room membership', error.message);
         return;
       }
+      setMemberRoomIds((current) => new Set(current).add(roomId));
     }
+
     store.joinRoom(roomId);
     setTab('rooms');
   };
@@ -178,14 +203,16 @@ export function StudyRoomsView() {
       .update({ is_online: false })
       .eq('room_id', joinedRoomId)
       .eq('user_id', userId);
+    // Membership remains saved. The user can open the room later with one tap.
     store.leaveRoom();
     setMembers([]);
   };
 
-  const visibleRooms = rooms.filter((r) => !r.is_private || r.owner_id === userId || r.id === joinedRoomId);
+  const visibleRooms = rooms.filter((r) => !r.is_private || r.owner_id === userId || memberRoomIds.has(r.id));
   const handleCreated = (room: RoomRow) => {
     setRooms((current) => [room, ...current.filter((r) => r.id !== room.id)]);
     setMemberCounts((current) => ({ ...current, [room.id]: 1 }));
+    setMemberRoomIds((current) => new Set(current).add(room.id));
     void handleJoin(room.id);
   };
 
@@ -290,7 +317,14 @@ export function StudyRoomsView() {
         ) : (
           <div className="space-y-3">
             {visibleRooms.map((r) => (
-              <RoomCard key={r.id} room={r} joined={r.id === joinedRoomId} memberCount={memberCounts[r.id] ?? 0} onJoin={() => handleJoin(r.id)} />
+              <RoomCard
+                key={r.id}
+                room={r}
+                joined={r.id === joinedRoomId}
+                member={memberRoomIds.has(r.id)}
+                memberCount={memberCounts[r.id] ?? 0}
+                onOpen={() => handleJoin(r.id)}
+              />
             ))}
           </div>
         )}
@@ -303,29 +337,31 @@ export function StudyRoomsView() {
   );
 }
 
-function RoomCard({ room, joined, memberCount, onJoin }: { room: RoomRow; joined: boolean; memberCount: number; onJoin: () => void }) {
+function RoomCard({ room, joined, member, memberCount, onOpen }: { room: RoomRow; joined: boolean; member: boolean; memberCount: number; onOpen: () => void }) {
   return (
-    <GlassCard className="p-4">
-      <div className="flex items-start justify-between mb-3">
-        <div>
-          <div className="flex items-center gap-2">
-            <h3 className="font-display font-bold text-lg">{room.name}</h3>
-            {room.is_private && <Lock size={14} className="text-neutralt-400" />}
+    <GlassCard className="p-0 overflow-hidden">
+      <button type="button" onClick={onOpen} className="w-full p-4 text-left glass-press">
+        <div className="flex items-start justify-between mb-3 gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h3 className="font-display font-bold text-lg truncate">{room.name}</h3>
+              {room.is_private && <Lock size={14} className="text-neutralt-400 shrink-0" />}
+            </div>
+            <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5 flex items-center gap-1 flex-wrap">
+              <Crown size={11} /> {room.owner_name} · {memberCount} members · <span className="font-bold tracking-wider">{room.room_code}</span>
+            </p>
           </div>
-          <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5 flex items-center gap-1">
-            <Crown size={11} /> {room.owner_name} · {memberCount} members · <span className="font-bold tracking-wider">{room.room_code}</span>
-          </p>
+          <span className={`shrink-0 rounded-xl px-3 py-1.5 text-xs font-bold ${joined ? 'bg-accent text-white' : member ? 'bg-accent/15 text-accent' : 'glass-subtle'}`}>
+            {joined ? 'Open' : member ? 'Open' : 'Join'}
+          </span>
         </div>
-        {!joined && (
-          <GlassButton size="sm" onClick={onJoin}>Join</GlassButton>
-        )}
-      </div>
-      <div className="flex items-center gap-4 mt-3 pt-3 border-t border-neutralt-400/20">
-        <span className="text-xs text-neutralt-500 dark:text-neutralt-400 flex items-center gap-1">
-          <Clock size={12} /> {fmtHM(room.total_study_sec)} total
-        </span>
-        <span className="text-xs text-neutralt-500 dark:text-neutralt-400">{room.total_sessions} sessions</span>
-      </div>
+        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-neutralt-400/20">
+          <span className="text-xs text-neutralt-500 dark:text-neutralt-400 flex items-center gap-1">
+            <Clock size={12} /> {fmtHM(room.total_study_sec)} total
+          </span>
+          <span className="text-xs text-neutralt-500 dark:text-neutralt-400">{room.total_sessions} sessions</span>
+        </div>
+      </button>
     </GlassCard>
   );
 }
@@ -502,6 +538,8 @@ function RoomChat({ roomId, userId, userName, userAvatar }: { roomId: string; us
   const [messages, setMessages] = useState<RoomMessageRow[]>([]);
   const [body, setBody] = useState('');
   const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -512,16 +550,23 @@ function RoomChat({ roomId, userId, userName, userAvatar }: { roomId: string; us
 
     let active = true;
     (async () => {
-      const { data } = await supabase.from('room_messages').select('*').eq('room_id', roomId).order('created_at', { ascending: true }).limit(200);
+      const { data, error } = await supabase.from('room_messages').select('*').eq('room_id', roomId).order('created_at', { ascending: true }).limit(200);
       if (!active) return;
-      setMessages(data ?? []);
+      if (error) {
+        console.error('Could not load room messages', error.message);
+        setErrorMsg('Chat yuklanmadi.');
+        setMessages([]);
+      } else {
+        setMessages(data ?? []);
+      }
       setLoading(false);
     })();
 
     const channel = supabase
       .channel(`room_messages_${roomId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'room_messages', filter: `room_id=eq.${roomId}` }, (payload) => {
-        setMessages((prev) => [...prev, payload.new as RoomMessageRow]);
+        const incoming = payload.new as RoomMessageRow;
+        setMessages((prev) => prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]);
       })
       .subscribe();
 
@@ -536,17 +581,29 @@ function RoomChat({ roomId, userId, userName, userAvatar }: { roomId: string; us
   }, [messages]);
 
   const send = async () => {
-    if (!isSupabaseConfigured) return;
-    if (!body.trim()) return;
+    if (!isSupabaseConfigured || sending) return;
     const text = body.trim();
-    setBody('');
-    await supabase.from('room_messages').insert({
+    if (!text) return;
+    setSending(true);
+    setErrorMsg('');
+    const { data, error } = await supabase.from('room_messages').insert({
       room_id: roomId,
       user_id: userId,
       user_name: userName,
       user_avatar: userAvatar,
       body: text,
-    });
+    }).select().single();
+
+    if (error || !data) {
+      console.error('Could not send room message', error?.message);
+      setErrorMsg('Xabar yuborilmadi. Qayta urinib ko‘ring.');
+      setSending(false);
+      return;
+    }
+
+    setBody('');
+    setMessages((prev) => prev.some((m) => m.id === data.id) ? prev : [...prev, data as RoomMessageRow]);
+    setSending(false);
   };
 
   return (
@@ -576,6 +633,7 @@ function RoomChat({ roomId, userId, userName, userAvatar }: { roomId: string; us
           })
         )}
       </div>
+      {errorMsg && <p className="text-xs text-red-500 text-center mt-1 font-semibold">{errorMsg}</p>}
       <div className="flex items-center gap-2 mt-2 pt-2 border-t border-neutralt-400/20">
         <input
           value={body}
@@ -584,7 +642,7 @@ function RoomChat({ roomId, userId, userName, userAvatar }: { roomId: string; us
           placeholder="Type a message…"
           className="flex-1 glass-subtle rounded-2xl px-3 py-2.5 text-sm font-medium outline-none focus:ring-2 ring-accent/40 bg-transparent"
         />
-        <button onClick={send} disabled={!body.trim()} className="w-10 h-10 rounded-2xl bg-accent text-white flex items-center justify-center glass-press disabled:opacity-40">
+        <button onClick={send} disabled={!body.trim() || sending} className="w-10 h-10 rounded-2xl bg-accent text-white flex items-center justify-center glass-press disabled:opacity-40">
           <Send size={16} />
         </button>
       </div>
