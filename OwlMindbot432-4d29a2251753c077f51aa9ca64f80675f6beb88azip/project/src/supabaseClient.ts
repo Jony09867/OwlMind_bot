@@ -28,6 +28,10 @@ export type RoomMemberRow = {
   joined_at: string;
   last_opened_at: string;
   last_read_at: string;
+  focus_status: 'idle' | 'focusing' | 'paused';
+  focus_type: 'pomodoro' | 'stopwatch' | 'deep' | null;
+  focus_started_at: string | null;
+  focus_elapsed_sec: number;
 };
 
 export type RoomMessageRow = {
