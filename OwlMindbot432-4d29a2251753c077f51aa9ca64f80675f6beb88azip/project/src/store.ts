@@ -364,11 +364,24 @@ export const store = {
     });
 
     if (isSupabaseConfigured && opts.roomId) {
-      supabase.rpc('increment_room_totals', {
+      const telegramUser = getTelegramUser();
+      const userId = getTelegramUserId() ?? 'local-user';
+      const userName = state.profile.name && state.profile.name !== 'You'
+        ? state.profile.name
+        : (telegramUser?.first_name ?? 'Telegram User');
+      const userAvatar = state.profile.avatar || '🦉';
+      supabase.rpc('record_room_focus_session', {
+        p_session_id: session.id,
         p_room_id: opts.roomId,
-        p_study_sec: opts.durationSec,
-        p_sessions: 1,
-      }).then(() => {});
+        p_user_id: userId,
+        p_user_name: userName,
+        p_user_avatar: userAvatar,
+        p_subject: opts.subject,
+        p_focus_type: opts.type,
+        p_duration_sec: Math.max(0, Math.floor(opts.durationSec)),
+      }).then(({ error }) => {
+        if (error) console.error('Failed to record room focus session', error.message);
+      });
     }
 
     if (isSupabaseConfigured) {
@@ -385,7 +398,7 @@ export const store = {
   },
 
   addBlock(block: Omit<StudyBlock, 'id'>): void {
-    setState((s) => ({ ...s, blocks: [...s.blocks, { ...block, id: uid() }] }));
+    setState((s) => ({ ...s, blocks: [...s.blocks, { ...block, id: uid() }]}));
   },
 
   deleteBlock(id: string): void {
@@ -411,25 +424,13 @@ export const store = {
         if (r.id !== s.joinedRoomId) return r;
         return {
           ...r,
-          members: r.members.map((m) => (m.isYou ? { ...m, subject, elapsedSec, online: true } : m)),
+          totalStudySec: r.totalStudySec + elapsedSec,
+          totalSessions: r.totalSessions + 1,
+          members: r.members.map((m) => (m.isYou ? { ...m, subject, elapsedSec: m.elapsedSec + elapsedSec, online: true } : m)),
         };
       });
       return { ...s, rooms };
     });
-    if (isSupabaseConfigured && state.joinedRoomId) {
-      const uid = getTelegramUserId() ?? 'local-user';
-      supabase
-        .from('room_participants')
-        .update({ subject, elapsed_sec: elapsedSec, is_online: true })
-        .eq('room_id', state.joinedRoomId)
-        .eq('user_id', uid)
-        .then(() => {});
-      supabase
-        .from('rooms')
-        .update({ total_study_sec: state.rooms.find((r) => r.id === state.joinedRoomId)?.totalStudySec ?? 0 })
-        .eq('id', state.joinedRoomId)
-        .then(() => {});
-    }
   },
 
   updateSettings(patch: Partial<Settings>): void {
