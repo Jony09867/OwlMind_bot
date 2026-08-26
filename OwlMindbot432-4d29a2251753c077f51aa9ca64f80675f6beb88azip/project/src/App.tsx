@@ -70,7 +70,9 @@ export default function App() {
 
       {/* Main content */}
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 pt-6 pb-28">
-        {tab === 'focus' && <FocusView />}
+        <div className={tab === 'focus' ? 'block' : 'hidden'} aria-hidden={tab !== 'focus'}>
+          <FocusView />
+        </div>
         {tab === 'tasks' && <TasksView />}
         {tab === 'schedule' && <ScheduleView onStartFocus={startFocusFromBlock} />}
         {tab === 'rooms' && <RoomsSearchView />}
