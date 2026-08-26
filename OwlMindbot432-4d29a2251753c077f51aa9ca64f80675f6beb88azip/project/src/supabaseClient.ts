@@ -9,6 +9,7 @@ export type RoomRow = {
   room_code: string;
   is_private: boolean;
   subject: string;
+  member_limit: number;
   total_study_sec: number;
   total_sessions: number;
   created_at: string;
