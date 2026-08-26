@@ -197,6 +197,9 @@ export function RoomsSearchView() {
     setErrorMsg('');
   };
 
+  const privateLocked = Boolean(result && result.room.is_private && result.room.owner_id !== userId && !result.isMember && !result.invited);
+  const roomFull = Boolean(result && !result.isMember && result.memberCount >= result.room.member_limit);
+
   return (
     <div className="rooms-code-layout flex flex-col pb-4">
       <style>{`
@@ -247,7 +250,7 @@ export function RoomsSearchView() {
             <div className="flex items-start gap-3">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-display font-bold truncate">{result.room.is_private && !result.isMember && !result.invited ? 'Private room' : result.room.name}</p>
+                  <p className="font-display font-bold truncate">{privateLocked ? 'Private room' : result.room.name}</p>
                   {result.room.is_private && <Lock size={13} className="text-neutralt-400" />}
                 </div>
                 <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1 flex items-center gap-1 flex-wrap">
@@ -261,9 +264,9 @@ export function RoomsSearchView() {
               <GlassButton
                 size="sm"
                 onClick={() => void openRoom()}
-                disabled={opening || (!result.isMember && result.memberCount >= result.room.member_limit) || (result.room.is_private && !result.isMember && !result.invited)}
+                disabled={opening || roomFull || privateLocked}
               >
-                {opening ? 'Opening…' : result.isMember ? 'Open' : result.room.is_private && !result.invited ? 'Locked' : result.memberCount >= result.room.member_limit ? 'Full' : 'Join'}
+                {opening ? 'Opening…' : result.isMember ? 'Open' : privateLocked ? 'Locked' : roomFull ? 'Full' : 'Join'}
               </GlassButton>
             </div>
           </GlassCard>
