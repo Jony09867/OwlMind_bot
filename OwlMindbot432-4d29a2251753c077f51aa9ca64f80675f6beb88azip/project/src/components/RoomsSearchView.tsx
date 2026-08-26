@@ -208,6 +208,44 @@ export function RoomsSearchView() {
         .rooms-code-layout > .rooms-original > .space-y-5 > header { order: 1; }
         .rooms-code-layout > .room-code-search { order: 2; margin-top: 1.25rem; }
         .rooms-code-layout > .rooms-original > .space-y-5 > :not(header) { order: 3; }
+
+        .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 > .min-w-0 > p {
+          font-family: inherit;
+          font-size: 0.75rem;
+          line-height: 1.15rem;
+          margin-top: 0.22rem;
+          letter-spacing: 0;
+        }
+        .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 > .min-w-0 > p:first-of-type {
+          margin-top: 0.45rem;
+          font-weight: 600;
+        }
+        .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 > .min-w-0 > p:nth-last-child(2),
+        .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 > .min-w-0 > p:last-child {
+          white-space: nowrap;
+          font-weight: 500;
+        }
+        .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 > .min-w-0 > p:nth-last-child(2) > span {
+          font-family: inherit;
+          font-weight: 700;
+          letter-spacing: 0.08em;
+        }
+
+        @media (max-width: 480px) {
+          .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 {
+            flex-wrap: wrap;
+            row-gap: 0.75rem;
+          }
+          .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 > .min-w-0 {
+            flex: 1 1 100%;
+            width: 100%;
+          }
+          .rooms-code-layout > .rooms-original > .space-y-5 > .p-5.animate-scale-in > .flex.items-start.justify-between.mb-4.gap-3 > .flex.gap-2.shrink-0.flex-wrap.justify-end {
+            flex: 1 1 100%;
+            width: 100%;
+            justify-content: flex-start;
+          }
+        }
       `}</style>
 
       <div className="rooms-original">
