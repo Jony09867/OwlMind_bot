@@ -398,7 +398,7 @@ export const store = {
   },
 
   addBlock(block: Omit<StudyBlock, 'id'>): void {
-    setState((s) => ({ ...s, blocks: [...s.blocks, { ...block, id: uid() }]}));
+    setState((s) => ({ ...s, blocks: [...s.blocks, { ...block, id: uid() }] }));
   },
 
   deleteBlock(id: string): void {
