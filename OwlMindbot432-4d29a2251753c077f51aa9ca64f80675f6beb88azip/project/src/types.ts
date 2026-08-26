@@ -34,6 +34,8 @@ export type FocusSession = {
   pomodoroCount: number;
   xpEarned: number;
   roomId: string | null;
+  scheduleBlockId?: string | null;
+  scheduleBlockTitle?: string | null;
 };
 
 export type StudyBlock = {
