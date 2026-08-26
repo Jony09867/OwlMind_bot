@@ -263,7 +263,7 @@ export function RoomsSearchView() {
             maxLength={6}
             placeholder="Search by room code"
             aria-label="Search room by code"
-            className="w-full glass-subtle rounded-2xl pl-10 pr-11 py-3 text-sm font-bold tracking-wider uppercase outline-none focus:ring-2 ring-accent/40 bg-transparent"
+            className="w-full glass-subtle rounded-2xl pl-10 pr-11 py-3 text-sm font-medium tracking-normal outline-none focus:ring-2 ring-accent/40 bg-transparent"
           />
           {code && (
             <button
