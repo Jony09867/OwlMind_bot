@@ -18,8 +18,15 @@ export function ScheduleView({ onStartFocus }: { onStartFocus: (blockId: string)
   blocks.forEach((b) => (byDay[b.day] ??= []).push(b));
   Object.values(byDay).forEach((arr) => arr.sort((a, b) => a.startMin - b.startMin));
 
+  const now = new Date();
+  const weekStart = new Date(now);
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(now.getDate() - todayIdx);
+  const weekStartMs = weekStart.getTime();
+  const weekEndMs = weekStartMs + 7 * 86400000;
+
   const studiedByBlock = sessions.reduce<Record<string, number>>((totals, session) => {
-    if (!session.scheduleBlockId) return totals;
+    if (!session.scheduleBlockId || session.startedAt < weekStartMs || session.startedAt >= weekEndMs) return totals;
     totals[session.scheduleBlockId] = (totals[session.scheduleBlockId] ?? 0) + session.durationSec;
     return totals;
   }, {});
