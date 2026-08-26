@@ -26,7 +26,7 @@ import {
 } from 'lucide-react';
 import { GlassCard, GlassButton, Badge, Modal, EmptyState, SegmentedControl } from './ui';
 import { store, useStore } from '../store';
-import { fmtHM } from '../hooks';
+import { fmtClock, fmtHM } from '../hooks';
 import {
   isSupabaseConfigured,
   supabase,
@@ -52,6 +52,24 @@ type RoomInviteRow = {
 };
 type UnreadRow = { room_id: string; unread_count: number | string };
 
+const ROOM_FOCUS_STALE_MS = 6 * 60 * 60 * 1000;
+
+function roomFocusElapsed(member: RoomMemberRow, now: number): number {
+  const base = Math.max(0, Number(member.focus_elapsed_sec) || 0);
+  if (member.focus_status !== 'focusing' || !member.focus_started_at) return base;
+  const startedAt = new Date(member.focus_started_at).getTime();
+  if (!Number.isFinite(startedAt)) return base;
+  const deltaMs = Math.max(0, now - startedAt);
+  if (deltaMs > ROOM_FOCUS_STALE_MS) return base;
+  return base + Math.floor(deltaMs / 1000);
+}
+
+function isLiveFocusing(member: RoomMemberRow, now: number): boolean {
+  if (member.focus_status !== 'focusing' || !member.focus_started_at) return false;
+  const startedAt = new Date(member.focus_started_at).getTime();
+  return Number.isFinite(startedAt) && now >= startedAt && now - startedAt <= ROOM_FOCUS_STALE_MS;
+}
+
 export function StudyRoomsView() {
   const profile = useStore((s) => s.profile);
   const joinedRoomId = useStore((s) => s.joinedRoomId);
@@ -71,6 +89,7 @@ export function StudyRoomsView() {
   const [tab, setTab] = useState<Tab>('rooms');
   const [roomListMode, setRoomListMode] = useState<RoomListMode>('mine');
   const [actionError, setActionError] = useState('');
+  const [liveNow, setLiveNow] = useState(() => Date.now());
   const handledInviteRef = useRef<string | null>(null);
 
   const userId = getTelegramUserId() ?? 'local-user';
@@ -172,6 +191,14 @@ export function StudyRoomsView() {
   }, [loading, myMemberships, pendingInvites.length]);
 
   useEffect(() => {
+    const hasRunningFocus = members.some((member) => isLiveFocusing(member, Date.now()));
+    if (!hasRunningFocus) return;
+    setLiveNow(Date.now());
+    const timer = window.setInterval(() => setLiveNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [members]);
+
+  useEffect(() => {
     if (!joinedRoomId || !isSupabaseConfigured) {
       setMembers([]);
       setMembersLoaded(false);
@@ -211,7 +238,13 @@ export function StudyRoomsView() {
     const onUnload = () => {
       void supabase
         .from('room_participants')
-        .update({ is_online: false })
+        .update({
+          is_online: false,
+          focus_status: 'idle',
+          focus_type: null,
+          focus_started_at: null,
+          focus_elapsed_sec: 0,
+        })
         .eq('room_id', joinedRoomId)
         .eq('user_id', userId);
     };
@@ -266,6 +299,20 @@ export function StudyRoomsView() {
     if (joinedRoomId === roomId && myMemberships[roomId]) {
       setTab('rooms');
       return { ok: true };
+    }
+
+    if (joinedRoomId && joinedRoomId !== roomId) {
+      await supabase
+        .from('room_participants')
+        .update({
+          is_online: false,
+          focus_status: 'idle',
+          focus_type: null,
+          focus_started_at: null,
+          focus_elapsed_sec: 0,
+        })
+        .eq('room_id', joinedRoomId)
+        .eq('user_id', userId);
     }
 
     const existingMember = myMemberships[roomId];
@@ -358,7 +405,13 @@ export function StudyRoomsView() {
     if (!joinedRoomId) return;
     await supabase
       .from('room_participants')
-      .update({ is_online: false })
+      .update({
+        is_online: false,
+        focus_status: 'idle',
+        focus_type: null,
+        focus_started_at: null,
+        focus_elapsed_sec: 0,
+      })
       .eq('room_id', joinedRoomId)
       .eq('user_id', userId);
     store.leaveRoom();
@@ -527,36 +580,54 @@ export function StudyRoomsView() {
 
           {tab === 'rooms' && (
             <div className="space-y-2">
-              {members.map((member) => (
-                <div key={member.id} className="glass-subtle rounded-2xl p-3 flex items-center gap-3">
-                  <div className="relative shrink-0">
-                    <div className="w-10 h-10 rounded-2xl bg-accent/15 flex items-center justify-center text-lg">
-                      {member.user_avatar || '🦉'}
-                    </div>
-                    {member.is_online && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-500 border-2 border-white dark:border-tahoe-300" />}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-semibold text-sm flex items-center gap-1.5 flex-wrap">
-                      {member.user_name}
-                      {member.user_id === userId && <Badge color="accent">You</Badge>}
-                      {(member.role === 'owner' || joinedRoom.owner_id === member.user_id) && <Crown size={12} className="text-amber-500" />}
-                      {member.role === 'admin' && <Badge color="neutral">Admin</Badge>}
-                    </p>
-                    <p className="text-xs text-neutralt-500 dark:text-neutralt-400 flex items-center gap-1">
-                      <BookOpen size={11} /> {member.subject}
-                    </p>
-                    {isOwner && member.user_id !== joinedRoom.owner_id && (
-                      <div className="mt-2">
-                        <GlassButton size="sm" variant="neutral" icon={Shield} onClick={() => setManageMember(member)}>Manage</GlassButton>
+              {members.map((member) => {
+                const focusing = isLiveFocusing(member, liveNow);
+                const paused = member.focus_status === 'paused';
+                const focusElapsed = roomFocusElapsed(member, liveNow);
+                return (
+                  <div key={member.id} className="glass-subtle rounded-2xl p-3 flex items-center gap-3">
+                    <div className="relative shrink-0">
+                      <div className="w-10 h-10 rounded-2xl bg-accent/15 flex items-center justify-center text-lg">
+                        {member.user_avatar || '🦉'}
                       </div>
-                    )}
+                      {member.is_online && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full bg-green-500 border-2 border-white dark:border-tahoe-300" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="font-semibold text-sm flex items-center gap-1.5 flex-wrap">
+                        {member.user_name}
+                        {member.user_id === userId && <Badge color="accent">You</Badge>}
+                        {(member.role === 'owner' || joinedRoom.owner_id === member.user_id) && <Crown size={12} className="text-amber-500" />}
+                        {member.role === 'admin' && <Badge color="neutral">Admin</Badge>}
+                      </p>
+                      <p className="text-xs text-neutralt-500 dark:text-neutralt-400 flex items-center gap-1 flex-wrap">
+                        <BookOpen size={11} />
+                        <span className="min-w-0 truncate">{member.subject}</span>
+                        {focusing && (
+                          <>
+                            <span>·</span>
+                            <span className="text-accent font-semibold whitespace-nowrap">Focusing · {fmtClock(focusElapsed)}</span>
+                          </>
+                        )}
+                        {!focusing && paused && (
+                          <>
+                            <span>·</span>
+                            <span className="font-semibold whitespace-nowrap">Paused · {fmtClock(focusElapsed)}</span>
+                          </>
+                        )}
+                      </p>
+                      {isOwner && member.user_id !== joinedRoom.owner_id && (
+                        <div className="mt-2">
+                          <GlassButton size="sm" variant="neutral" icon={Shield} onClick={() => setManageMember(member)}>Manage</GlassButton>
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <p className="font-bold text-sm tabular-nums">{fmtHM(member.elapsed_sec)}</p>
+                      <p className="text-[10px] text-neutralt-500 dark:text-neutralt-400">today</p>
+                    </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className="font-bold text-sm tabular-nums">{fmtHM(member.elapsed_sec)}</p>
-                    <p className="text-[10px] text-neutralt-500 dark:text-neutralt-400">today</p>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
               {members.length === 0 && <p className="text-sm text-neutralt-500 text-center py-4">No members yet.</p>}
             </div>
           )}
@@ -877,7 +948,7 @@ function CreateRoomModal({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [subject, setSubject] = useState('Study');
-  const [memberLimit, setMemberLimit] = useState(50);
+  const [memberLimit, setMemberLimit] = useState(10);
   const [isPrivate, setIsPrivate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -887,7 +958,7 @@ function CreateRoomModal({
       setName('');
       setDescription('');
       setSubject('Study');
-      setMemberLimit(50);
+      setMemberLimit(10);
       setIsPrivate(false);
       setErrorMsg('');
       setCreating(false);
@@ -914,7 +985,7 @@ function CreateRoomModal({
         if (userError) throw userError;
       }
 
-      const safeLimit = Math.min(500, Math.max(2, Math.floor(memberLimit || 50)));
+      const safeLimit = Math.min(10, Math.max(2, Math.floor(memberLimit || 10)));
       const { data, error } = await supabase.from('rooms').insert({
         name: name.trim(),
         description: description.trim(),
@@ -988,9 +1059,9 @@ function CreateRoomModal({
           <input
             type="number"
             min={2}
-            max={500}
+            max={10}
             value={memberLimit}
-            onChange={(event) => setMemberLimit(Math.min(500, Math.max(2, Number(event.target.value) || 2)))}
+            onChange={(event) => setMemberLimit(Math.min(10, Math.max(2, Number(event.target.value) || 2)))}
             className="w-full bg-transparent font-bold outline-none"
           />
         </label>
@@ -1137,7 +1208,7 @@ function RoomSettingsModal({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [subject, setSubject] = useState('Study');
-  const [memberLimit, setMemberLimit] = useState(50);
+  const [memberLimit, setMemberLimit] = useState(10);
   const [isPrivate, setIsPrivate] = useState(false);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1149,7 +1220,7 @@ function RoomSettingsModal({
     setName(room.name);
     setDescription(room.description || '');
     setSubject(room.subject || 'Study');
-    setMemberLimit(room.member_limit || 50);
+    setMemberLimit(Math.min(10, room.member_limit || 10));
     setIsPrivate(room.is_private);
     setErrorMsg('');
     setConfirmDelete(false);
@@ -1161,7 +1232,7 @@ function RoomSettingsModal({
     if (!name.trim() || saving) return;
     setSaving(true);
     setErrorMsg('');
-    const safeLimit = Math.min(500, Math.max(Math.max(2, memberCount), Math.floor(memberLimit || 50)));
+    const safeLimit = Math.min(10, Math.max(Math.max(2, memberCount), Math.floor(memberLimit || 10)));
     const { data, error } = await supabase
       .from('rooms')
       .update({
@@ -1239,9 +1310,9 @@ function RoomSettingsModal({
           <input
             type="number"
             min={Math.max(2, memberCount)}
-            max={500}
+            max={10}
             value={memberLimit}
-            onChange={(event) => setMemberLimit(Math.min(500, Math.max(Math.max(2, memberCount), Number(event.target.value) || Math.max(2, memberCount))))}
+            onChange={(event) => setMemberLimit(Math.min(10, Math.max(Math.max(2, memberCount), Number(event.target.value) || Math.max(2, memberCount))))}
             className="w-full bg-transparent font-bold outline-none"
           />
         </label>

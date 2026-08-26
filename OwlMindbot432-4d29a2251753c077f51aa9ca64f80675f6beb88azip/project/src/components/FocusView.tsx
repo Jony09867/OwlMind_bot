@@ -4,6 +4,7 @@ import { GlassCard, GlassButton, ProgressRing, SegmentedControl, Modal, Badge } 
 import { store, useStore, useDailyStudySec, useWeeklyStudySec } from '../store';
 import { fmtDuration, fmtHM, fmtClock, playChime } from '../hooks';
 import { POMODORO_PRESETS, DAILY_GOALS, type SessionType, type PomodoroPhase } from '../types';
+import { clearRoomFocus, setRoomFocusPaused, setRoomFocusRunning } from '../lib/roomFocus';
 
 type Tab = SessionType;
 
@@ -341,6 +342,7 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
       const dur = phaseDuration;
       setCompletedDuration((c) => c + dur);
       playChime(settings.soundEnabled, settings.vibrationEnabled);
+      if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
       if (phase === 'focus') {
         const newCount = pomodoroCount + 1;
         setPomodoroCount(newCount);
@@ -352,6 +354,49 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
       engine.reset();
     },
   });
+
+  useEffect(() => {
+    if (!joinedRoomId) return;
+    if (engine.running) {
+      if (phase === 'focus') void setRoomFocusRunning(joinedRoomId, subject, 'pomodoro', engine.elapsed);
+      else void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', 0);
+    } else if (engine.elapsed > 0) {
+      void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', phase === 'focus' ? engine.elapsed : 0);
+    }
+    // Only resync when the active room changes; timer ticks must stay local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  useEffect(() => () => {
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+    // Clear stale live state if this timer mode is unmounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  const startTimer = () => {
+    engine.start();
+    if (!joinedRoomId) return;
+    if (phase === 'focus') {
+      void setRoomFocusRunning(joinedRoomId, subject, 'pomodoro', engine.elapsed);
+    } else {
+      void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', 0);
+    }
+  };
+
+  const pauseTimer = () => {
+    engine.pause();
+    if (!joinedRoomId) return;
+    if (phase === 'focus') {
+      void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', engine.elapsed);
+    } else {
+      void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', 0);
+    }
+  };
+
+  const resetTimer = () => {
+    engine.reset();
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+  };
 
   const handleEnd = () => {
     if (completedDuration > 0 || engine.elapsed > 10) {
@@ -367,6 +412,7 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
       onComplete(total, pomodoroCount, result.xpEarned, result.leveledUp, result.newAchievements);
       if (joinedRoomId) store.updateRoomMemberStudy(subject, total);
     }
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
     setCompletedDuration(0);
     setPomodoroCount(0);
     setPhase('focus');
@@ -400,11 +446,11 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
       )}
       <div className="flex items-center justify-center gap-3 mt-6">
         {!engine.running ? (
-          <GlassButton size="lg" icon={Play} onClick={engine.start}>Start</GlassButton>
+          <GlassButton size="lg" icon={Play} onClick={startTimer}>Start</GlassButton>
         ) : (
-          <GlassButton size="lg" variant="ghost" icon={Pause} onClick={engine.pause}>Pause</GlassButton>
+          <GlassButton size="lg" variant="ghost" icon={Pause} onClick={pauseTimer}>Pause</GlassButton>
         )}
-        <GlassButton size="lg" variant="neutral" icon={RotateCcw} onClick={engine.reset}>Reset</GlassButton>
+        <GlassButton size="lg" variant="neutral" icon={RotateCcw} onClick={resetTimer}>Reset</GlassButton>
         <GlassButton size="lg" variant="danger" icon={Square} onClick={handleEnd}>End</GlassButton>
       </div>
       {completedDuration > 0 && (
@@ -420,12 +466,47 @@ function StopwatchTimer({ subject, category, onComplete }: { subject: string; ca
   const joinedRoomId = useStore((s) => s.joinedRoomId);
   const engine = useTimerEngine({ durationSec: null, onComplete: () => {} });
 
+  useEffect(() => {
+    if (!joinedRoomId) return;
+    if (engine.running) void setRoomFocusRunning(joinedRoomId, subject, 'stopwatch', engine.elapsed);
+    else if (engine.elapsed > 0) void setRoomFocusPaused(joinedRoomId, subject, 'stopwatch', engine.elapsed);
+    // Only resync when the active room changes; timer ticks must stay local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  useEffect(() => () => {
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+    // Clear stale live state if this timer mode is unmounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  const startTimer = () => {
+    engine.start();
+    if (joinedRoomId) void setRoomFocusRunning(joinedRoomId, subject, 'stopwatch', engine.elapsed);
+  };
+
+  const pauseTimer = () => {
+    engine.pause();
+    if (joinedRoomId) void setRoomFocusPaused(joinedRoomId, subject, 'stopwatch', engine.elapsed);
+  };
+
+  const resetTimer = () => {
+    engine.reset();
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+  };
+
   const handleEnd = () => {
     const total = Math.floor(engine.elapsed);
-    if (total < 10) return;
+    if (total < 10) {
+      resetTimer();
+      return;
+    }
     const result = store.completeSession({ type: 'stopwatch', subject, category, durationSec: total, pomodoroCount: 0, roomId: joinedRoomId });
     onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements);
-    if (joinedRoomId) store.updateRoomMemberStudy(subject, total);
+    if (joinedRoomId) {
+      store.updateRoomMemberStudy(subject, total);
+      void clearRoomFocus(joinedRoomId, subject);
+    }
     engine.reset();
   };
 
@@ -442,11 +523,11 @@ function StopwatchTimer({ subject, category, onComplete }: { subject: string; ca
       </div>
       <div className="flex items-center justify-center gap-3 mt-6">
         {!engine.running ? (
-          <GlassButton size="lg" icon={Play} onClick={engine.start}>Start</GlassButton>
+          <GlassButton size="lg" icon={Play} onClick={startTimer}>Start</GlassButton>
         ) : (
-          <GlassButton size="lg" variant="ghost" icon={Pause} onClick={engine.pause}>Pause</GlassButton>
+          <GlassButton size="lg" variant="ghost" icon={Pause} onClick={pauseTimer}>Pause</GlassButton>
         )}
-        <GlassButton size="lg" variant="neutral" icon={RotateCcw} onClick={engine.reset}>Reset</GlassButton>
+        <GlassButton size="lg" variant="neutral" icon={RotateCcw} onClick={resetTimer}>Reset</GlassButton>
         <GlassButton size="lg" variant="danger" icon={Square} onClick={handleEnd}>Save</GlassButton>
       </div>
     </GlassCard>
@@ -464,10 +545,42 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
       playChime(settings.soundEnabled, settings.vibrationEnabled);
       const result = store.completeSession({ type: 'deep', subject, category, durationSec: total, pomodoroCount: 0, roomId: joinedRoomId });
       onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements);
-      if (joinedRoomId) store.updateRoomMemberStudy(subject, total);
+      if (joinedRoomId) {
+        store.updateRoomMemberStudy(subject, total);
+        void clearRoomFocus(joinedRoomId, subject);
+      }
       engine.reset();
     },
   });
+
+  useEffect(() => {
+    if (!joinedRoomId) return;
+    if (engine.running) void setRoomFocusRunning(joinedRoomId, subject, 'deep', engine.elapsed);
+    else if (engine.elapsed > 0) void setRoomFocusPaused(joinedRoomId, subject, 'deep', engine.elapsed);
+    // Only resync when the active room changes; timer ticks must stay local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  useEffect(() => () => {
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+    // Clear stale live state if this timer mode is unmounted.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [joinedRoomId]);
+
+  const startTimer = () => {
+    engine.start();
+    if (joinedRoomId) void setRoomFocusRunning(joinedRoomId, subject, 'deep', engine.elapsed);
+  };
+
+  const pauseTimer = () => {
+    engine.pause();
+    if (joinedRoomId) void setRoomFocusPaused(joinedRoomId, subject, 'deep', engine.elapsed);
+  };
+
+  const resetTimer = () => {
+    engine.reset();
+    if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
+  };
 
   const progress = engine.elapsed / (targetMin * 60);
   const remaining = Math.max(targetMin * 60 - engine.elapsed, 0);
@@ -489,7 +602,10 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
         {[60, 90, 120, 180].map((m) => (
           <button
             key={m}
-            onClick={() => { setTargetMin(m); engine.reset(); }}
+            onClick={() => {
+              setTargetMin(m);
+              resetTimer();
+            }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold glass-press transition-all ${targetMin === m ? 'bg-accent text-white' : 'glass-subtle'}`}
           >
             {m}m
@@ -498,17 +614,23 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
       </div>
       <div className="flex items-center justify-center gap-3 mt-6">
         {!engine.running ? (
-          <GlassButton size="lg" icon={Play} onClick={engine.start}>Start</GlassButton>
+          <GlassButton size="lg" icon={Play} onClick={startTimer}>Start</GlassButton>
         ) : (
-          <GlassButton size="lg" variant="ghost" icon={Pause} onClick={engine.pause}>Pause</GlassButton>
+          <GlassButton size="lg" variant="ghost" icon={Pause} onClick={pauseTimer}>Pause</GlassButton>
         )}
-        <GlassButton size="lg" variant="neutral" icon={RotateCcw} onClick={engine.reset}>Reset</GlassButton>
+        <GlassButton size="lg" variant="neutral" icon={RotateCcw} onClick={resetTimer}>Reset</GlassButton>
         <GlassButton size="lg" variant="danger" icon={Square} onClick={() => {
           const total = Math.floor(engine.elapsed);
-          if (total < 10) { engine.reset(); return; }
+          if (total < 10) {
+            resetTimer();
+            return;
+          }
           const result = store.completeSession({ type: 'deep', subject, category, durationSec: total, pomodoroCount: 0, roomId: joinedRoomId });
           onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements);
-          if (joinedRoomId) store.updateRoomMemberStudy(subject, total);
+          if (joinedRoomId) {
+            store.updateRoomMemberStudy(subject, total);
+            void clearRoomFocus(joinedRoomId, subject);
+          }
           engine.reset();
         }}>Save</GlassButton>
       </div>
