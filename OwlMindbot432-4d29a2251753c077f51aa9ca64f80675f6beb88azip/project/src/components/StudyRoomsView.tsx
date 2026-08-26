@@ -5,7 +5,7 @@ import { store, useStore } from '../store';
 import { fmtHM } from '../hooks';
 import { isSupabaseConfigured, supabase, type RoomRow, type RoomMemberRow, type RoomMessageRow, type RoomFileRow } from '../supabaseClient';
 import { generateRoomCode, upsertTelegramUser } from '../lib/supabase';
-import { getTelegramUserId, getTelegramUserName } from '../telegram';
+import { getTelegramStartParam, getTelegramUserId, getTelegramUserName, openTelegramLink } from '../telegram';
 
 type Tab = 'rooms' | 'chat' | 'files';
 
@@ -16,17 +16,19 @@ export function StudyRoomsView() {
   const [members, setMembers] = useState<RoomMemberRow[]>([]);
   const [memberCounts, setMemberCounts] = useState<Record<string, number>>({});
   const [memberRoomIds, setMemberRoomIds] = useState<Set<string>>(new Set());
+  const [invitedRoomIds, setInvitedRoomIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [showJoin, setShowJoin] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
   const [tab, setTab] = useState<Tab>('rooms');
+  const handledInviteRef = useRef<string | null>(null);
 
   const userId = getTelegramUserId() ?? 'local-user';
   const userName = profile.name && profile.name !== 'You' ? profile.name : (getTelegramUserName() ?? 'You');
   const userAvatar = profile.avatar || '🦉';
 
-  // Load all rooms + aggregate member counts + this user's saved memberships.
+  // Load all rooms + aggregate member counts + this user's saved memberships/invites.
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setLoading(false);
@@ -72,9 +74,20 @@ export function StudyRoomsView() {
       setMemberRoomIds(new Set(data.map((r: { room_id: string }) => r.room_id)));
     };
 
+    const loadMyInvites = async () => {
+      const { data, error } = await supabase
+        .from('room_invites')
+        .select('room_id')
+        .eq('invitee_id', userId)
+        .eq('status', 'pending');
+      if (!active || error || !data) return;
+      setInvitedRoomIds(new Set(data.map((r: { room_id: string }) => r.room_id)));
+    };
+
     loadRooms();
     loadCounts();
     loadMyMemberships();
+    loadMyInvites();
 
     const channel = supabase
       .channel('rooms_changes')
@@ -83,6 +96,7 @@ export function StudyRoomsView() {
         loadCounts();
         loadMyMemberships();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'room_invites', filter: `invitee_id=eq.${userId}` }, () => loadMyInvites())
       .subscribe();
 
     return () => {
@@ -112,7 +126,7 @@ export function StudyRoomsView() {
     const markOnline = async () => {
       await supabase
         .from('room_participants')
-        .update({ is_online: true })
+        .update({ is_online: true, last_opened_at: new Date().toISOString() })
         .eq('room_id', joinedRoomId)
         .eq('user_id', userId);
     };
@@ -147,7 +161,6 @@ export function StudyRoomsView() {
   const handleJoin = async (roomId: string) => {
     if (!isSupabaseConfigured) return;
 
-    // If this room is already open, just switch to the members tab.
     if (joinedRoomId === roomId) {
       setTab('rooms');
       return;
@@ -164,15 +177,20 @@ export function StudyRoomsView() {
       return;
     }
 
+    const now = new Date().toISOString();
     if (!existingMember) {
+      const room = rooms.find((r) => r.id === roomId);
       const { error } = await supabase.from('room_participants').insert({
         room_id: roomId,
         user_id: userId,
         user_name: userName,
         user_avatar: userAvatar,
-        subject: 'Study',
+        subject: room?.subject || 'Study',
+        role: room?.owner_id === userId ? 'owner' : 'member',
         elapsed_sec: 0,
         is_online: true,
+        last_opened_at: now,
+        last_read_at: now,
       });
       if (error) {
         console.error('Could not join room', error.message);
@@ -182,7 +200,7 @@ export function StudyRoomsView() {
     } else {
       const { error } = await supabase
         .from('room_participants')
-        .update({ is_online: true, user_name: userName, user_avatar: userAvatar })
+        .update({ is_online: true, user_name: userName, user_avatar: userAvatar, last_opened_at: now })
         .eq('room_id', roomId)
         .eq('user_id', userId);
       if (error) {
@@ -192,9 +210,46 @@ export function StudyRoomsView() {
       setMemberRoomIds((current) => new Set(current).add(roomId));
     }
 
+    if (invitedRoomIds.has(roomId)) {
+      await supabase
+        .from('room_invites')
+        .update({ status: 'accepted', accepted_at: now })
+        .eq('room_id', roomId)
+        .eq('invitee_id', userId)
+        .eq('status', 'pending');
+      setInvitedRoomIds((current) => {
+        const next = new Set(current);
+        next.delete(roomId);
+        return next;
+      });
+    }
+
     store.joinRoom(roomId);
     setTab('rooms');
   };
+
+  // Accept a copied/deep Telegram room link in one tap.
+  useEffect(() => {
+    if (!isSupabaseConfigured || rooms.length === 0) return;
+
+    const queryToken = new URLSearchParams(window.location.search).get('join')?.trim() ?? null;
+    const startParam = getTelegramStartParam();
+    const startToken = startParam?.startsWith('room_') ? startParam.slice(5).trim() : null;
+    const token = queryToken || startToken;
+    if (!token || handledInviteRef.current === token) return;
+
+    const room = rooms.find((r) => r.id === token || r.room_code === token.toUpperCase());
+    if (!room) return;
+
+    handledInviteRef.current = token;
+    void handleJoin(room.id).then(() => {
+      if (queryToken) {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('join');
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
+      }
+    });
+  }, [rooms]);
 
   const handleLeave = async () => {
     if (!joinedRoomId) return;
@@ -203,12 +258,11 @@ export function StudyRoomsView() {
       .update({ is_online: false })
       .eq('room_id', joinedRoomId)
       .eq('user_id', userId);
-    // Membership remains saved. The user can open the room later with one tap.
     store.leaveRoom();
     setMembers([]);
   };
 
-  const visibleRooms = rooms.filter((r) => !r.is_private || r.owner_id === userId || memberRoomIds.has(r.id));
+  const visibleRooms = rooms.filter((r) => !r.is_private || r.owner_id === userId || memberRoomIds.has(r.id) || invitedRoomIds.has(r.id));
   const handleCreated = (room: RoomRow) => {
     setRooms((current) => [room, ...current.filter((r) => r.id !== room.id)]);
     setMemberCounts((current) => ({ ...current, [room.id]: 1 }));
@@ -232,18 +286,24 @@ export function StudyRoomsView() {
       {joinedRoom && (
         <GlassCard strong className="p-5 animate-scale-in">
           <div className="flex items-center justify-between mb-4">
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h2 className="font-display text-xl font-bold">{joinedRoom.name}</h2>
+                <h2 className="font-display text-xl font-bold truncate">{joinedRoom.name}</h2>
                 <Badge color="green"><Radio size={10} /> Live</Badge>
                 {joinedRoom.is_private && <Lock size={12} className="text-neutralt-400" />}
               </div>
+              <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1 flex items-center gap-1">
+                <BookOpen size={11} /> {joinedRoom.subject || 'Study'}
+              </p>
+              {joinedRoom.description && (
+                <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1 line-clamp-2">{joinedRoom.description}</p>
+              )}
               <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1">Room code: <span className="font-bold tracking-widest">{joinedRoom.room_code}</span></p>
               <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5">
                 {members.filter((m) => m.is_online).length} online · {members.length} members
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 shrink-0">
               <GlassButton size="sm" variant="neutral" icon={UserPlus} onClick={() => setShowInvite(true)}>Invite</GlassButton>
               <GlassButton size="sm" variant="neutral" icon={LogOut} onClick={handleLeave}>Leave</GlassButton>
             </div>
@@ -282,7 +342,7 @@ export function StudyRoomsView() {
                     <p className="font-semibold text-sm flex items-center gap-1.5">
                       {m.user_name}
                       {m.user_id === userId && <Badge color="accent">You</Badge>}
-                      {joinedRoom.owner_id === m.user_id && <Crown size={12} className="text-amber-500" />}
+                      {(m.role === 'owner' || joinedRoom.owner_id === m.user_id) && <Crown size={12} className="text-amber-500" />}
                     </p>
                     <p className="text-xs text-neutralt-500 dark:text-neutralt-400 flex items-center gap-1">
                       <BookOpen size={11} /> {m.subject}
@@ -322,6 +382,7 @@ export function StudyRoomsView() {
                 room={r}
                 joined={r.id === joinedRoomId}
                 member={memberRoomIds.has(r.id)}
+                invited={invitedRoomIds.has(r.id)}
                 memberCount={memberCounts[r.id] ?? 0}
                 onOpen={() => handleJoin(r.id)}
               />
@@ -332,12 +393,12 @@ export function StudyRoomsView() {
 
       <CreateRoomModal open={showCreate} onClose={() => setShowCreate(false)} userId={userId} userName={userName} userAvatar={userAvatar} onCreated={handleCreated} />
       <JoinRoomModal open={showJoin} onClose={() => setShowJoin(false)} onJoin={handleJoin} />
-      <InviteModal open={showInvite} onClose={() => setShowInvite(false)} roomId={joinedRoomId} userId={userId} />
+      <InviteModal open={showInvite} onClose={() => setShowInvite(false)} roomId={joinedRoomId} roomCode={joinedRoom?.room_code ?? null} userId={userId} />
     </div>
   );
 }
 
-function RoomCard({ room, joined, member, memberCount, onOpen }: { room: RoomRow; joined: boolean; member: boolean; memberCount: number; onOpen: () => void }) {
+function RoomCard({ room, joined, member, invited, memberCount, onOpen }: { room: RoomRow; joined: boolean; member: boolean; invited: boolean; memberCount: number; onOpen: () => void }) {
   return (
     <GlassCard className="p-0 overflow-hidden">
       <button type="button" onClick={onOpen} className="w-full p-4 text-left glass-press">
@@ -346,6 +407,7 @@ function RoomCard({ room, joined, member, memberCount, onOpen }: { room: RoomRow
             <div className="flex items-center gap-2">
               <h3 className="font-display font-bold text-lg truncate">{room.name}</h3>
               {room.is_private && <Lock size={14} className="text-neutralt-400 shrink-0" />}
+              {invited && <Badge color="accent">Invited</Badge>}
             </div>
             <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5 flex items-center gap-1 flex-wrap">
               <Crown size={11} /> {room.owner_name} · {memberCount} members · <span className="font-bold tracking-wider">{room.room_code}</span>
@@ -355,7 +417,10 @@ function RoomCard({ room, joined, member, memberCount, onOpen }: { room: RoomRow
             {joined ? 'Open' : member ? 'Open' : 'Join'}
           </span>
         </div>
-        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-neutralt-400/20">
+        <div className="flex items-center gap-4 mt-3 pt-3 border-t border-neutralt-400/20 flex-wrap">
+          <span className="text-xs text-neutralt-500 dark:text-neutralt-400 flex items-center gap-1">
+            <BookOpen size={12} /> {room.subject || 'Study'}
+          </span>
           <span className="text-xs text-neutralt-500 dark:text-neutralt-400 flex items-center gap-1">
             <Clock size={12} /> {fmtHM(room.total_study_sec)} total
           </span>
@@ -415,6 +480,8 @@ function JoinRoomModal({ open, onClose, onJoin }: { open: boolean; onClose: () =
 
 function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreated }: { open: boolean; onClose: () => void; userId: string; userName: string; userAvatar: string; onCreated: (room: RoomRow) => void }) {
   const [name, setName] = useState('');
+  const [subject, setSubject] = useState('Study');
+  const [description, setDescription] = useState('');
   const [isPrivate, setIsPrivate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -438,33 +505,42 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
         });
         if (userError) throw userError;
       }
+      const normalizedSubject = subject.trim() || 'Study';
       const { data, error } = await supabase.from('rooms').insert({
         name: name.trim(),
+        description: description.trim(),
         owner_id: userId,
         owner_name: userName,
         room_code: generateRoomCode(),
         is_private: isPrivate,
-        subject: 'Study',
+        subject: normalizedSubject,
         total_study_sec: 0,
         total_sessions: 0,
       }).select().single();
       if (error || !data) throw new Error(error?.message || 'Could not create room');
 
+      const now = new Date().toISOString();
       const { error: memberError } = await supabase.from('room_participants').insert({
         room_id: data.id,
         user_id: userId,
         user_name: userName,
         user_avatar: userAvatar,
-        subject: 'Study',
+        subject: normalizedSubject,
+        role: 'owner',
         elapsed_sec: 0,
         is_online: true,
+        last_opened_at: now,
+        last_read_at: now,
       });
       if (memberError) {
         await supabase.from('rooms').delete().eq('id', data.id);
         throw new Error(memberError.message);
       }
       setCreating(false);
-      setName(''); setIsPrivate(false);
+      setName('');
+      setSubject('Study');
+      setDescription('');
+      setIsPrivate(false);
       onClose();
       onCreated(data as RoomRow);
     } catch (cause) {
@@ -478,6 +554,8 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
     <Modal open={open} onClose={onClose} title="Create Study Room">
       <div className="space-y-4">
         <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Room name" className="w-full glass-subtle rounded-2xl px-4 py-3 font-medium outline-none focus:ring-2 ring-accent/40 bg-transparent" />
+        <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Subject" maxLength={50} className="w-full glass-subtle rounded-2xl px-4 py-3 font-medium outline-none focus:ring-2 ring-accent/40 bg-transparent" />
+        <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Description (optional)" maxLength={220} rows={2} className="w-full glass-subtle rounded-2xl px-4 py-3 font-medium outline-none focus:ring-2 ring-accent/40 bg-transparent resize-none" />
         <button onClick={() => setIsPrivate(!isPrivate)} className="w-full flex items-center justify-between glass-subtle rounded-2xl px-4 py-3 glass-press">
           <span className="flex items-center gap-2 text-sm font-medium"><Lock size={16} className="text-neutralt-500" /> Private room</span>
           <span className={`w-10 h-6 rounded-full p-0.5 transition-colors ${isPrivate ? 'bg-accent' : 'bg-neutralt-400/40'}`}>
@@ -491,27 +569,64 @@ function CreateRoomModal({ open, onClose, userId, userName, userAvatar, onCreate
   );
 }
 
-function InviteModal({ open, onClose, roomId, userId }: { open: boolean; onClose: () => void; roomId: string | null; userId: string }) {
+function InviteModal({ open, onClose, roomId, roomCode, userId }: { open: boolean; onClose: () => void; roomId: string | null; roomCode: string | null; userId: string }) {
   const [inviteeId, setInviteeId] = useState('');
   const [done, setDone] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const buildJoinUrl = () => {
+    if (!roomCode) return '';
+    const directMiniAppUrl = (import.meta.env.VITE_TELEGRAM_MINI_APP_URL as string | undefined)?.trim();
+    if (directMiniAppUrl) {
+      const separator = directMiniAppUrl.includes('?') ? '&' : '?';
+      return `${directMiniAppUrl}${separator}startapp=room_${roomCode}`;
+    }
+    return `${window.location.origin}${window.location.pathname}?join=${encodeURIComponent(roomCode)}`;
+  };
 
   const submit = async () => {
-    if (!roomId || !inviteeId.trim()) return;
-    await supabase.from('room_invites').insert({
-      room_id: roomId,
-      inviter_id: userId,
-      invitee_id: inviteeId.trim(),
-    });
+    const invitee = inviteeId.trim();
+    if (!roomId || !invitee) return;
+    setErrorMsg('');
+
+    const { data: existing } = await supabase
+      .from('room_invites')
+      .select('id')
+      .eq('room_id', roomId)
+      .eq('invitee_id', invitee)
+      .eq('status', 'pending')
+      .maybeSingle();
+
+    if (!existing) {
+      const { error } = await supabase.from('room_invites').insert({
+        room_id: roomId,
+        inviter_id: userId,
+        invitee_id: invitee,
+      });
+      if (error) {
+        console.error('Could not send room invite', error.message);
+        setErrorMsg('Taklif yuborilmadi.');
+        return;
+      }
+    }
+
     setDone(true);
-    setTimeout(() => { setDone(false); setInviteeId(''); onClose(); }, 1500);
+    setTimeout(() => { setDone(false); setInviteeId(''); onClose(); }, 1200);
+  };
+
+  const shareToTelegram = () => {
+    const joinUrl = buildJoinUrl();
+    if (!joinUrl) return;
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(joinUrl)}&text=${encodeURIComponent('Join my OwlMind study room')}`;
+    openTelegramLink(shareUrl);
   };
 
   const copyLink = () => {
-    if (!roomId) return;
-    const url = `${window.location.origin}?join=${roomId}`;
-    navigator.clipboard?.writeText(url).catch(() => {});
+    const joinUrl = buildJoinUrl();
+    if (!joinUrl) return;
+    navigator.clipboard?.writeText(joinUrl).catch(() => {});
     setDone(true);
-    setTimeout(() => { setDone(false); onClose(); }, 1500);
+    setTimeout(() => { setDone(false); }, 1200);
   };
 
   return (
@@ -527,7 +642,9 @@ function InviteModal({ open, onClose, roomId, userId }: { open: boolean; onClose
           <span className="text-xs text-neutralt-400">or</span>
           <div className="flex-1 h-px bg-neutralt-400/20" />
         </div>
+        <GlassButton className="w-full" onClick={shareToTelegram}>Share to Telegram</GlassButton>
         <GlassButton variant="neutral" className="w-full" onClick={copyLink}>Copy invite link</GlassButton>
+        {errorMsg && <p className="text-sm text-red-500 text-center font-semibold">{errorMsg}</p>}
         {done && <p className="text-sm text-green-500 text-center font-semibold">Done!</p>}
       </div>
     </Modal>
@@ -653,6 +770,7 @@ function RoomChat({ roomId, userId, userName, userAvatar }: { roomId: string; us
 function RoomFiles({ roomId, userId, userName, userAvatar }: { roomId: string; userId: string; userName: string; userAvatar: string }) {
   const [files, setFiles] = useState<RoomFileRow[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -660,15 +778,22 @@ function RoomFiles({ roomId, userId, userName, userAvatar }: { roomId: string; u
 
     let active = true;
     (async () => {
-      const { data } = await supabase.from('room_files').select('*').eq('room_id', roomId).order('created_at', { ascending: false }).limit(100);
+      const { data, error } = await supabase.from('room_files').select('*').eq('room_id', roomId).order('created_at', { ascending: false }).limit(100);
       if (!active) return;
-      setFiles(data ?? []);
+      if (error) {
+        console.error('Could not load room files', error.message);
+        setErrorMsg('Fayllar yuklanmadi.');
+        setFiles([]);
+      } else {
+        setFiles(data ?? []);
+      }
     })();
 
     const channel = supabase
       .channel(`room_files_${roomId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'room_files', filter: `room_id=eq.${roomId}` }, (payload) => {
-        setFiles((prev) => [payload.new as RoomFileRow, ...prev]);
+        const incoming = payload.new as RoomFileRow;
+        setFiles((prev) => prev.some((f) => f.id === incoming.id) ? prev : [incoming, ...prev]);
       })
       .subscribe();
 
@@ -682,36 +807,45 @@ function RoomFiles({ roomId, userId, userName, userAvatar }: { roomId: string; u
     if (!isSupabaseConfigured) return;
     const file = e.target.files?.[0];
     if (!file || uploading) return;
+    setErrorMsg('');
+
+    if (file.size > 15 * 1024 * 1024) {
+      setErrorMsg('Fayl hajmi 15 MB dan oshmasligi kerak.');
+      if (inputRef.current) inputRef.current.value = '';
+      return;
+    }
+
     setUploading(true);
     try {
       const ext = file.name.split('.').pop() ?? 'bin';
       const path = `${roomId}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
       const { error: upErr } = await supabase.storage.from('room-files').upload(path, file, { upsert: false });
       if (upErr) {
-        const url = URL.createObjectURL(file);
-        await supabase.from('room_files').insert({
-          room_id: roomId,
-          user_id: userId,
-          user_name: userName,
-          user_avatar: userAvatar,
-          file_name: file.name,
-          file_url: url,
-          file_type: file.type.startsWith('image/') ? 'image' : 'file',
-          file_size: file.size,
-        });
-      } else {
-        const { data: pub } = supabase.storage.from('room-files').getPublicUrl(path);
-        await supabase.from('room_files').insert({
-          room_id: roomId,
-          user_id: userId,
-          user_name: userName,
-          user_avatar: userAvatar,
-          file_name: file.name,
-          file_url: pub.publicUrl,
-          file_type: file.type.startsWith('image/') ? 'image' : 'file',
-          file_size: file.size,
-        });
+        console.error('Could not upload room file', upErr.message);
+        setErrorMsg('Fayl yuklanmadi. Qayta urinib ko‘ring.');
+        return;
       }
+
+      const { data: pub } = supabase.storage.from('room-files').getPublicUrl(path);
+      const { data, error } = await supabase.from('room_files').insert({
+        room_id: roomId,
+        user_id: userId,
+        user_name: userName,
+        user_avatar: userAvatar,
+        file_name: file.name,
+        file_url: pub.publicUrl,
+        file_type: file.type.startsWith('image/') ? 'image' : 'file',
+        file_size: file.size,
+      }).select().single();
+
+      if (error || !data) {
+        console.error('Could not save room file metadata', error?.message);
+        setErrorMsg('Fayl ma’lumoti saqlanmadi.');
+        await supabase.storage.from('room-files').remove([path]);
+        return;
+      }
+
+      setFiles((prev) => prev.some((f) => f.id === data.id) ? prev : [data as RoomFileRow, ...prev]);
     } finally {
       setUploading(false);
       if (inputRef.current) inputRef.current.value = '';
@@ -729,6 +863,7 @@ function RoomFiles({ roomId, userId, userName, userAvatar }: { roomId: string; u
         <Paperclip size={16} />
         {uploading ? 'Uploading…' : 'Upload file'}
       </button>
+      {errorMsg && <p className="text-xs text-red-500 text-center font-semibold">{errorMsg}</p>}
       {files.length === 0 ? (
         <p className="text-sm text-neutralt-500 text-center py-6">No files shared yet.</p>
       ) : (
