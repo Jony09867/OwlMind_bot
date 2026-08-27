@@ -339,10 +339,10 @@ function PomodoroTimer({ subject, category, onComplete }: {
     durationSec: phaseDuration,
     onComplete: () => {
       const dur = phaseDuration;
-      setCompletedDuration((c) => c + dur);
       playChime(settings.soundEnabled, settings.vibrationEnabled);
       if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
       if (phase === 'focus') {
+        setCompletedDuration((completed) => completed + dur);
         const newCount = pomodoroCount + 1;
         setPomodoroCount(newCount);
         const isLong = newCount % 4 === 0;
@@ -400,7 +400,7 @@ function PomodoroTimer({ subject, category, onComplete }: {
 
   const handleEnd = () => {
     if (completedDuration > 0 || engine.elapsed > 10) {
-      const total = completedDuration + Math.floor(engine.elapsed);
+      const total = completedDuration + Math.floor(phase === 'focus' ? engine.elapsed : 0);
       const result = store.completeSession({
         type: 'pomodoro',
         subject,
