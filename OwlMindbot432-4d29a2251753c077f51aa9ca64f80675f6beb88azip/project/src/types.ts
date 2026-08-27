@@ -127,7 +127,6 @@ export type RankingScope =
   | 'monthly'
   | 'seasonal'
   | 'friends'
-  | 'room'
   | 'global';
 
 export const POMODORO_PRESETS = [
