@@ -11,7 +11,7 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { useTheme } from './hooks';
 import { store, useStore } from './store';
 import { getTelegramStartParam, getTelegramUser, initTelegram } from './telegram';
-import { isSupabaseConfigured, loadUserStudyData, syncLocalFocusSessions, syncUserStudyStats, upsertTelegramUser } from './lib/supabase';
+import { isSupabaseConfigured, loadUserStudyData, syncLocalFocusSessions, syncUserGamificationState, syncUserStudyStats, upsertTelegramUser } from './lib/supabase';
 
 type Tab = 'focus' | 'tasks' | 'schedule' | 'rooms' | 'rankings' | 'profile';
 
@@ -50,6 +50,12 @@ export default function App() {
         local.profile.level,
       );
       if (statsSyncError) console.error('Failed to preserve study totals', statsSyncError.message);
+
+      const { error: gamificationSyncError } = await syncUserGamificationState(
+        telegramUser.id,
+        local.profile,
+      );
+      if (gamificationSyncError) console.error('Failed to preserve gamification state', gamificationSyncError.message);
 
       const cloud = await loadUserStudyData(telegramUser.id);
       if (cloud.error) {

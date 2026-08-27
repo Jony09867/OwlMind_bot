@@ -115,6 +115,8 @@ export type UserProfile = {
   longestStreak: number;
   lastStudyDate: string | null;
   streakFreezes: number;
+  lastDailyGoalRewardDate: string | null;
+  lastStreakRewardDate: string | null;
   achievements: Achievement[];
   createdAt: number;
 };

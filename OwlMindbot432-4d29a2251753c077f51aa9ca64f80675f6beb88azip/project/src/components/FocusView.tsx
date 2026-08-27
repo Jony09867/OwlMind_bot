@@ -20,7 +20,14 @@ export function FocusView() {
   const [subject, setSubject] = useState('Study');
   const [category, setCategory] = useState(categories[0]?.id ?? 'study');
   const [showSettings, setShowSettings] = useState(false);
-  const [showSummary, setShowSummary] = useState<null | { xp: number; leveledUp: boolean; newAch: string[]; duration: number; pomodoros: number }>(null);
+  const [showSummary, setShowSummary] = useState<null | {
+    xp: number;
+    leveledUp: boolean;
+    newAch: string[];
+    rewardNotes: string[];
+    duration: number;
+    pomodoros: number;
+  }>(null);
 
   const goalProgress = dailyGoal > 0 ? Math.min(dailySec / dailyGoal, 1) : 0;
 
@@ -45,8 +52,8 @@ export function FocusView() {
         <PomodoroTimer
           subject={subject}
           category={category}
-          onComplete={(duration, pomodoros, xp, leveledUp, newAch) => {
-            setShowSummary({ xp, leveledUp, newAch, duration, pomodoros });
+          onComplete={(duration, pomodoros, xp, leveledUp, newAch, rewardNotes) => {
+            setShowSummary({ xp, leveledUp, newAch, rewardNotes, duration, pomodoros });
           }}
         />
       )}
@@ -54,8 +61,8 @@ export function FocusView() {
         <StopwatchTimer
           subject={subject}
           category={category}
-          onComplete={(duration, xp, leveledUp, newAch) => {
-            setShowSummary({ xp, leveledUp, newAch, duration, pomodoros: 0 });
+          onComplete={(duration, xp, leveledUp, newAch, rewardNotes) => {
+            setShowSummary({ xp, leveledUp, newAch, rewardNotes, duration, pomodoros: 0 });
           }}
         />
       )}
@@ -63,8 +70,8 @@ export function FocusView() {
         <DeepFocusTimer
           subject={subject}
           category={category}
-          onComplete={(duration, xp, leveledUp, newAch) => {
-            setShowSummary({ xp, leveledUp, newAch, duration, pomodoros: 0 });
+          onComplete={(duration, xp, leveledUp, newAch, rewardNotes) => {
+            setShowSummary({ xp, leveledUp, newAch, rewardNotes, duration, pomodoros: 0 });
           }}
         />
       )}
@@ -216,6 +223,13 @@ export function FocusView() {
               <p className="font-display text-2xl font-bold">{fmtDuration(showSummary.duration)}</p>
               <p className="text-sm text-neutralt-500 dark:text-neutralt-400">{showSummary.pomodoros > 0 && `${showSummary.pomodoros} pomodoros · `}{showSummary.xp} XP earned</p>
             </div>
+            {showSummary.rewardNotes.length > 0 && (
+              <div className="space-y-1">
+                {showSummary.rewardNotes.map((note) => (
+                  <Badge key={note} color="green" className="text-sm py-1">{note}</Badge>
+                ))}
+              </div>
+            )}
             {showSummary.leveledUp && (
               <Badge color="accent" className="text-sm py-1">Level Up! +20 coins</Badge>
             )}
@@ -301,7 +315,18 @@ function useTimerEngine(opts: {
   return { running, elapsed, start, pause, stop, reset, setElapsed };
 }
 
-function PomodoroTimer({ subject, category, onComplete }: { subject: string; category: string; onComplete: (duration: number, pomodoros: number, xp: number, leveledUp: boolean, newAch: string[]) => void }) {
+function PomodoroTimer({ subject, category, onComplete }: {
+  subject: string;
+  category: string;
+  onComplete: (
+    duration: number,
+    pomodoros: number,
+    xp: number,
+    leveledUp: boolean,
+    newAch: string[],
+    rewardNotes: string[],
+  ) => void;
+}) {
   const settings = useStore((s) => s.settings);
   const [phase, setPhase] = useState<PomodoroPhase>('focus');
   const [pomodoroCount, setPomodoroCount] = useState(0);
@@ -314,10 +339,10 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
     durationSec: phaseDuration,
     onComplete: () => {
       const dur = phaseDuration;
-      setCompletedDuration((c) => c + dur);
       playChime(settings.soundEnabled, settings.vibrationEnabled);
       if (joinedRoomId) void clearRoomFocus(joinedRoomId, subject);
       if (phase === 'focus') {
+        setCompletedDuration((completed) => completed + dur);
         const newCount = pomodoroCount + 1;
         setPomodoroCount(newCount);
         const isLong = newCount % 4 === 0;
@@ -375,7 +400,7 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
 
   const handleEnd = () => {
     if (completedDuration > 0 || engine.elapsed > 10) {
-      const total = completedDuration + Math.floor(engine.elapsed);
+      const total = completedDuration + Math.floor(phase === 'focus' ? engine.elapsed : 0);
       const result = store.completeSession({
         type: 'pomodoro',
         subject,
@@ -384,7 +409,14 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
         pomodoroCount,
         roomId: joinedRoomId,
       });
-      onComplete(total, pomodoroCount, result.xpEarned, result.leveledUp, result.newAchievements);
+      onComplete(
+        total,
+        pomodoroCount,
+        result.xpEarned,
+        result.leveledUp,
+        result.newAchievements,
+        result.rewardNotes,
+      );
       if (joinedRoomId) store.updateRoomMemberStudy(subject, total);
     } else {
       store.cancelScheduleFocus();
@@ -439,7 +471,17 @@ function PomodoroTimer({ subject, category, onComplete }: { subject: string; cat
   );
 }
 
-function StopwatchTimer({ subject, category, onComplete }: { subject: string; category: string; onComplete: (duration: number, xp: number, leveledUp: boolean, newAch: string[]) => void }) {
+function StopwatchTimer({ subject, category, onComplete }: {
+  subject: string;
+  category: string;
+  onComplete: (
+    duration: number,
+    xp: number,
+    leveledUp: boolean,
+    newAch: string[],
+    rewardNotes: string[],
+  ) => void;
+}) {
   const joinedRoomId = useStore((s) => s.joinedRoomId);
   const engine = useTimerEngine({ durationSec: null, onComplete: () => {} });
 
@@ -480,7 +522,7 @@ function StopwatchTimer({ subject, category, onComplete }: { subject: string; ca
       return;
     }
     const result = store.completeSession({ type: 'stopwatch', subject, category, durationSec: total, pomodoroCount: 0, roomId: joinedRoomId });
-    onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements);
+    onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements, result.rewardNotes);
     if (joinedRoomId) {
       store.updateRoomMemberStudy(subject, total);
       void clearRoomFocus(joinedRoomId, subject);
@@ -512,7 +554,17 @@ function StopwatchTimer({ subject, category, onComplete }: { subject: string; ca
   );
 }
 
-function DeepFocusTimer({ subject, category, onComplete }: { subject: string; category: string; onComplete: (duration: number, xp: number, leveledUp: boolean, newAch: string[]) => void }) {
+function DeepFocusTimer({ subject, category, onComplete }: {
+  subject: string;
+  category: string;
+  onComplete: (
+    duration: number,
+    xp: number,
+    leveledUp: boolean,
+    newAch: string[],
+    rewardNotes: string[],
+  ) => void;
+}) {
   const settings = useStore((s) => s.settings);
   const joinedRoomId = useStore((s) => s.joinedRoomId);
   const [targetMin, setTargetMin] = useState(90);
@@ -522,7 +574,7 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
       const total = Math.floor(elapsed);
       playChime(settings.soundEnabled, settings.vibrationEnabled);
       const result = store.completeSession({ type: 'deep', subject, category, durationSec: total, pomodoroCount: 0, roomId: joinedRoomId });
-      onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements);
+      onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements, result.rewardNotes);
       if (joinedRoomId) {
         store.updateRoomMemberStudy(subject, total);
         void clearRoomFocus(joinedRoomId, subject);
@@ -610,7 +662,7 @@ function DeepFocusTimer({ subject, category, onComplete }: { subject: string; ca
             return;
           }
           const result = store.completeSession({ type: 'deep', subject, category, durationSec: total, pomodoroCount: 0, roomId: joinedRoomId });
-          onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements);
+          onComplete(total, result.xpEarned, result.leveledUp, result.newAchievements, result.rewardNotes);
           if (joinedRoomId) {
             store.updateRoomMemberStudy(subject, total);
             void clearRoomFocus(joinedRoomId, subject);
