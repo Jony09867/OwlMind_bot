@@ -242,7 +242,7 @@ export function RankingsView() {
       <header className="px-1">
         <h1 className="font-display text-3xl font-extrabold tracking-tight">Rankings</h1>
         <p className="text-neutralt-500 dark:text-neutralt-400 text-sm mt-1">
-          Real Focus competition. Rooms are separate.
+          Compete by real Focus time.
         </p>
       </header>
 
@@ -535,7 +535,7 @@ function FriendRaceSection({
             <GlassCard subtle className="p-4 text-center">
               <p className="font-semibold text-sm">You’re the first racer here.</p>
               <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-1">
-                Invite friends — no Study Room is required.
+                Invite friends directly to this private race.
               </p>
             </GlassCard>
           )}
