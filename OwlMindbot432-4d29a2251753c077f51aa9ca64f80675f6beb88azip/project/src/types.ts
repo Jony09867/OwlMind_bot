@@ -36,6 +36,8 @@ export type FocusSession = {
   roomId: string | null;
   scheduleBlockId?: string | null;
   scheduleBlockTitle?: string | null;
+  /** 1 = created after the cloud session ledger was introduced. */
+  ledgerVersion?: 1;
 };
 
 export type StudyBlock = {
