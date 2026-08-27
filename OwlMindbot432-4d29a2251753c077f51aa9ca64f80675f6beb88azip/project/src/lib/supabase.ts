@@ -91,6 +91,7 @@ export async function syncUserGamificationState(
       p_streak_freezes: Math.max(0, Math.floor(profile.streakFreezes)),
       p_last_daily_goal_reward_date: profile.lastDailyGoalRewardDate,
       p_last_streak_reward_date: profile.lastStreakRewardDate,
+      p_level: Math.max(1, Math.floor(profile.level)),
     });
     return { error: error ? new Error(error.message) : null };
   } catch (cause) {
