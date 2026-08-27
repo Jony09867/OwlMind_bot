@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import type { FocusSession } from '../types';
+import type { FocusSession, UserProfile } from '../types';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -29,6 +29,16 @@ export type UserRow = {
   study_time: number;
   total_sessions: number;
   level: number;
+  xp: number;
+  coins: number;
+  total_tasks_done: number;
+  current_streak: number;
+  longest_streak: number;
+  last_study_date: string | null;
+  streak_freezes: number;
+  last_daily_goal_reward_date: string | null;
+  last_streak_reward_date: string | null;
+  gamification_updated_at: string;
   updated_at: string;
 };
 
@@ -58,6 +68,29 @@ export async function syncUserStudyStats(user: TelegramUser, studyTime: number, 
       p_study_time: Math.max(0, Math.floor(studyTime)),
       p_total_sessions: Math.max(0, Math.floor(totalSessions)),
       p_level: Math.max(1, Math.floor(level)),
+    });
+    return { error: error ? new Error(error.message) : null };
+  } catch (cause) {
+    return { error: cause instanceof Error ? cause : new Error('Network error') };
+  }
+}
+
+export async function syncUserGamificationState(
+  userId: string,
+  profile: UserProfile,
+): Promise<{ error: Error | null }> {
+  try {
+    const { error } = await supabase.rpc('sync_user_gamification_state', {
+      p_user_id: userId,
+      p_xp: Math.max(0, Math.floor(profile.xp)),
+      p_coins: Math.max(0, Math.floor(profile.coins)),
+      p_total_tasks_done: Math.max(0, Math.floor(profile.totalTasksDone)),
+      p_current_streak: Math.max(0, Math.floor(profile.currentStreak)),
+      p_longest_streak: Math.max(0, Math.floor(profile.longestStreak)),
+      p_last_study_date: profile.lastStudyDate,
+      p_streak_freezes: Math.max(0, Math.floor(profile.streakFreezes)),
+      p_last_daily_goal_reward_date: profile.lastDailyGoalRewardDate,
+      p_last_streak_reward_date: profile.lastStreakRewardDate,
     });
     return { error: error ? new Error(error.message) : null };
   } catch (cause) {
