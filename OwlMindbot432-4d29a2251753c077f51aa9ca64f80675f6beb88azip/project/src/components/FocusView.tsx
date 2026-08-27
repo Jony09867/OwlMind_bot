@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, Square, RotateCcw, Timer, Watch, Brain, ChevronDown, Check, Volume2, Vibrate, Bell } from 'lucide-react';
 import { GlassCard, GlassButton, ProgressRing, SegmentedControl, Modal, Badge } from './ui';
-import { store, useStore, useDailyStudySec, useWeeklyStudySec } from '../store';
+import { store, useStore, useDailyStudySec } from '../store';
 import { fmtDuration, fmtHM, fmtClock, playChime } from '../hooks';
 import { POMODORO_PRESETS, DAILY_GOALS, type SessionType, type PomodoroPhase } from '../types';
 import { clearRoomFocus, setRoomFocusPaused, setRoomFocusRunning } from '../lib/roomFocus';
@@ -13,7 +13,6 @@ export function FocusView() {
   const settings = useStore((s) => s.settings);
   const dailyGoal = settings.dailyGoalMin * 60;
   const dailySec = useDailyStudySec();
-  const weekly = useWeeklyStudySec();
   const sessions = useStore((s) => s.sessions);
   const profile = useStore((s) => s.profile);
   const categories = useStore((s) => s.categories);
@@ -112,34 +111,6 @@ export function FocusView() {
         <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-2">
           {goalProgress >= 1 ? 'Goal complete! Bonus XP earned.' : `${Math.round(goalProgress * 100)}% there`}
         </p>
-      </GlassCard>
-
-      {/* Weekly chart */}
-      <GlassCard className="p-5">
-        <div className="flex items-center justify-between mb-4">
-          <p className="font-display font-bold text-lg">This Week</p>
-          <Badge color="accent">{fmtHM(weekly.reduce((a, b) => a + b, 0))} total</Badge>
-        </div>
-        <div className="flex items-end justify-between gap-2 h-32">
-          {weekly.map((sec, i) => {
-            const max = Math.max(...weekly, 3600);
-            const h = Math.max((sec / max) * 100, 4);
-            const today = i === weekly.length - 1;
-            return (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1.5">
-                <div className="w-full flex-1 flex items-end">
-                  <div
-                    className={`w-full rounded-t-lg transition-all duration-500 ${today ? 'bg-accent' : 'bg-accent/40'}`}
-                    style={{ height: `${h}%` }}
-                  />
-                </div>
-                <span className="text-[10px] text-neutralt-500 dark:text-neutralt-400 font-medium">
-                  {['M', 'T', 'W', 'T', 'F', 'S', 'S'][i]}
-                </span>
-              </div>
-            );
-          })}
-        </div>
       </GlassCard>
 
       {/* Session history */}
