@@ -11,7 +11,7 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { useTheme } from './hooks';
 import { store, useStore } from './store';
 import { getTelegramStartParam, getTelegramUser, initTelegram } from './telegram';
-import { isSupabaseConfigured, upsertTelegramUser } from './lib/supabase';
+import { isSupabaseConfigured, loadUserStudyData, syncLocalFocusSessions, syncUserStudyStats, upsertTelegramUser } from './lib/supabase';
 
 type Tab = 'focus' | 'tasks' | 'schedule' | 'rooms' | 'rankings' | 'profile';
 
@@ -30,9 +30,37 @@ export default function App() {
   useEffect(() => {
     const telegramUser = getTelegramUser();
     if (!telegramUser || !isSupabaseConfigured) return;
-    upsertTelegramUser(telegramUser).then(({ error }) => {
-      if (error) console.error('Failed to sync Telegram user', error.message);
-    });
+
+    let cancelled = false;
+    const hydrateStudyData = async () => {
+      const { error: userError } = await upsertTelegramUser(telegramUser);
+      if (userError) {
+        console.error('Failed to sync Telegram user', userError.message);
+        return;
+      }
+
+      const local = store.get();
+      const { error: sessionSyncError } = await syncLocalFocusSessions(telegramUser.id, local.sessions);
+      if (sessionSyncError) console.error('Failed to sync local focus sessions', sessionSyncError.message);
+
+      const { error: statsSyncError } = await syncUserStudyStats(
+        telegramUser,
+        local.profile.totalStudySec,
+        local.profile.totalSessions,
+        local.profile.level,
+      );
+      if (statsSyncError) console.error('Failed to preserve study totals', statsSyncError.message);
+
+      const cloud = await loadUserStudyData(telegramUser.id);
+      if (cloud.error) {
+        console.error('Failed to load cloud study data', cloud.error.message);
+        return;
+      }
+      if (!cancelled) store.hydrateStudyData(cloud.sessions, cloud.stats);
+    };
+
+    hydrateStudyData();
+    return () => { cancelled = true; };
   }, []);
   const [tab, setTab] = useState<Tab>(() => {
     const joinParam = new URLSearchParams(window.location.search).get('join');

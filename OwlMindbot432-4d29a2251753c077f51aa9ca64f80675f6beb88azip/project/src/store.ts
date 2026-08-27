@@ -20,7 +20,7 @@ import {
 import { getTelegramUserId } from './telegram';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { getTelegramUser } from './telegram';
-import { syncUserStudyStats } from './lib/supabase';
+import { recordFocusSession } from './lib/supabase';
 
 export type TimerState = {
   isRunning: boolean;
@@ -275,6 +275,29 @@ function updateStreak(p: UserProfile): UserProfile {
 export const store = {
   get: () => state,
 
+  hydrateStudyData(
+    cloudSessions: FocusSession[],
+    cloudStats: { study_time: number; total_sessions: number; level: number } | null,
+  ): void {
+    setState((s) => {
+      const byId = new Map<string, FocusSession>();
+      s.sessions.forEach((session) => byId.set(session.id, session));
+      cloudSessions.forEach((session) => byId.set(session.id, session));
+      const sessions = [...byId.values()].sort((a, b) => a.startedAt - b.startedAt);
+
+      const sessionStudySec = sessions.reduce((total, session) => total + Math.max(0, session.durationSec), 0);
+      let profile: UserProfile = {
+        ...s.profile,
+        totalStudySec: Math.max(s.profile.totalStudySec, Number(cloudStats?.study_time ?? 0), sessionStudySec),
+        totalSessions: Math.max(s.profile.totalSessions, Number(cloudStats?.total_sessions ?? 0), sessions.length),
+        level: Math.max(s.profile.level, Number(cloudStats?.level ?? 1)),
+      };
+      profile = recalcAchievements(profile, { ...s, sessions });
+
+      return { ...s, sessions, profile };
+    });
+  },
+
   addTask(input: Omit<Task, 'id' | 'createdAt' | 'done' | 'completedAt' | 'xpAwarded'>): void {
     setState((s) => ({
       ...s,
@@ -347,6 +370,7 @@ export const store = {
       roomId: opts.roomId,
       scheduleBlockId: scheduleBlock?.id ?? null,
       scheduleBlockTitle: scheduleBlock?.title ?? null,
+      ledgerVersion: 1,
     };
     let result = { xpEarned, leveledUp: false, newAchievements: [] as string[] };
 
@@ -361,6 +385,7 @@ export const store = {
       profile = updateStreak(profile);
       if (profile.currentStreak === 7) profile.xp += XP_RULES.streak7;
       const newLevel = levelFromXp(profile.xp).level;
+      profile.level = newLevel;
       if (newLevel > oldLevel) {
         profile.coins += 20 * (newLevel - oldLevel);
         result.leveledUp = true;
@@ -394,11 +419,10 @@ export const store = {
     }
 
     if (isSupabaseConfigured) {
-      const telegramUser = getTelegramUser();
-      if (telegramUser) {
-        const p = state.profile;
-        syncUserStudyStats(telegramUser, p.totalStudySec, p.totalSessions, p.level).then(({ error }) => {
-          if (error) console.error('Failed to sync user study stats', error.message);
+      const userId = getTelegramUserId();
+      if (userId) {
+        recordFocusSession(userId, session, true, state.profile.level).then(({ error }) => {
+          if (error) console.error('Failed to record focus session', error.message);
         });
       }
     }
@@ -547,16 +571,17 @@ export function useDailyStudySec(): number {
 export function useWeeklyStudySec(): number[] {
   const sessions = useStore((s) => s.sessions);
   return useMemo(() => {
-    const days: number[] = [];
-    for (let i = 6; i >= 0; i--) {
-      const start = startOfDay(Date.now() - i * 86400000);
+    const now = new Date();
+    const mondayIndex = (now.getDay() + 6) % 7;
+    const weekStart = startOfDay(Date.now()) - mondayIndex * 86400000;
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const start = weekStart + i * 86400000;
       const end = start + 86400000;
-      const total = sessions
-        .filter((x) => x.startedAt >= start && x.startedAt < end)
-        .reduce((a, b) => a + b.durationSec, 0);
-      days.push(total);
-    }
-    return days;
+      return sessions
+        .filter((session) => session.startedAt >= start && session.startedAt < end)
+        .reduce((total, session) => total + session.durationSec, 0);
+    });
   }, [sessions]);
 }
 

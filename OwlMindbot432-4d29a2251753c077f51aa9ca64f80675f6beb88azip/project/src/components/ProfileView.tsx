@@ -24,6 +24,7 @@ export function ProfileView() {
   const lvl = levelFromXp(profile.xp);
   const weekly = useWeeklyStudySec();
   const weeklyTotal = weekly.reduce((a, b) => a + b, 0);
+  const todayIndex = (new Date().getDay() + 6) % 7;
 
   const subjectMap: Record<string, number> = {};
   sessions.forEach((s) => { subjectMap[s.subject] = (subjectMap[s.subject] ?? 0) + s.durationSec; });
@@ -83,7 +84,7 @@ export function ProfileView() {
           {weekly.map((sec, i) => {
             const max = Math.max(...weekly, 3600);
             const h = Math.max((sec / max) * 100, 4);
-            const today = i === weekly.length - 1;
+            const today = i === todayIndex;
             return (
               <div key={i} className="flex-1 flex flex-col items-center gap-1">
                 <div className="w-full flex-1 flex items-end">
