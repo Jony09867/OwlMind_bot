@@ -25,10 +25,15 @@ function buildWebAppUrl(baseUrl, startParam) {
     if (roomCode) url.searchParams.set('join', roomCode);
   }
 
+  if (startParam?.startsWith('race_')) {
+    const raceCode = startParam.slice('race_'.length).trim();
+    if (raceCode) url.searchParams.set('race', raceCode);
+  }
+
   return url.toString();
 }
 
-function copyFor(languageCode = 'en', isRoomInvite = false) {
+function copyFor(languageCode = 'en', isRoomInvite = false, isRaceInvite = false) {
   const lang = languageCode.toLowerCase();
 
   if (lang.startsWith('uz')) {
@@ -43,8 +48,10 @@ function copyFor(languageCode = 'en', isRoomInvite = false) {
         '🏆 streak, reyting va o‘qish natijalaringizni kuzatasiz\n\n' +
         (isRoomInvite
           ? 'Siz Study Room taklifi orqali keldingiz. Xonani ochish uchun tugmani bosing 👇'
-          : 'Boshlash uchun quyidagi tugmani bosing 👇'),
-      button: isRoomInvite ? '👥 Room’ni ochish' : '🦉 OwlMind’ni ochish',
+          : isRaceInvite
+            ? 'Siz Friends Race taklifi orqali keldingiz. Haftalik poygaga qo‘shilish uchun tugmani bosing 👇'
+            : 'Boshlash uchun quyidagi tugmani bosing 👇'),
+      button: isRoomInvite ? '👥 Room’ni ochish' : isRaceInvite ? '🏁 Race’ga qo‘shilish' : '🦉 OwlMind’ni ochish',
     };
   }
 
@@ -60,8 +67,10 @@ function copyFor(languageCode = 'en', isRoomInvite = false) {
         '🏆 отслеживать streak, рейтинг и результаты учёбы\n\n' +
         (isRoomInvite
           ? 'Вы перешли по приглашению в Study Room. Нажмите кнопку ниже, чтобы открыть комнату 👇'
-          : 'Нажмите кнопку ниже, чтобы открыть приложение 👇'),
-      button: isRoomInvite ? '👥 Открыть комнату' : '🦉 Открыть OwlMind',
+          : isRaceInvite
+            ? 'Вы перешли по приглашению в Friends Race. Нажмите ниже, чтобы присоединиться к недельной гонке 👇'
+            : 'Нажмите кнопку ниже, чтобы открыть приложение 👇'),
+      button: isRoomInvite ? '👥 Открыть комнату' : isRaceInvite ? '🏁 Присоединиться к гонке' : '🦉 Открыть OwlMind',
     };
   }
 
@@ -76,8 +85,10 @@ function copyFor(languageCode = 'en', isRoomInvite = false) {
       '🏆 track your streak, rankings and study progress\n\n' +
       (isRoomInvite
         ? 'You came through a Study Room invite. Tap below to open the room 👇'
-        : 'Tap the button below to open the app 👇'),
-    button: isRoomInvite ? '👥 Open room' : '🦉 Open OwlMind',
+        : isRaceInvite
+          ? 'You came through a Friends Race invite. Tap below to join the weekly race 👇'
+          : 'Tap the button below to open the app 👇'),
+    button: isRoomInvite ? '👥 Open room' : isRaceInvite ? '🏁 Join race' : '🦉 Open OwlMind',
   };
 }
 
@@ -138,8 +149,9 @@ export default async function handler(req, res) {
 
   const startParam = isStart ? parseStartParam(text) : null;
   const isRoomInvite = Boolean(startParam?.startsWith('room_'));
+  const isRaceInvite = Boolean(startParam?.startsWith('race_'));
   const webAppUrl = buildWebAppUrl(baseWebAppUrl, startParam);
-  const copy = copyFor(message?.from?.language_code || 'en', isRoomInvite);
+  const copy = copyFor(message?.from?.language_code || 'en', isRoomInvite, isRaceInvite);
 
   try {
     await sendTelegramMessage(botToken, {
