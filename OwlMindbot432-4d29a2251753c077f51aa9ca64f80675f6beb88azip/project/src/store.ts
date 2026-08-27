@@ -20,7 +20,7 @@ import {
 import { getTelegramUserId } from './telegram';
 import { isSupabaseConfigured, supabase } from './supabaseClient';
 import { getTelegramUser } from './telegram';
-import { recordFocusSession } from './lib/supabase';
+import { recordFocusSession, syncUserGamificationState } from './lib/supabase';
 
 export type TimerState = {
   isRunning: boolean;
@@ -53,7 +53,37 @@ function storageKey(): string {
 }
 
 function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function dateValue(date: string | null | undefined): number {
+  if (!date) return 0;
+  const [year, month, day] = date.split('-').map(Number);
+  if (!year || !month || !day) return 0;
+  return new Date(year, month - 1, day).getTime();
+}
+
+function latestDate(a: string | null | undefined, b: string | null | undefined): string | null {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  return dateValue(b) > dateValue(a) ? b : a;
+}
+
+function daysBetweenDates(from: string, to: string): number {
+  return Math.round((dateValue(to) - dateValue(from)) / 86400000);
+}
+
+function syncGamificationToCloud(): void {
+  if (!isSupabaseConfigured) return;
+  const userId = getTelegramUserId();
+  if (!userId) return;
+  syncUserGamificationState(userId, state.profile).then(({ error }) => {
+    if (error) console.error('Failed to sync gamification state', error.message);
+  });
 }
 
 function uid(): string {
@@ -74,6 +104,8 @@ function defaultProfile(): UserProfile {
     longestStreak: 0,
     lastStudyDate: null,
     streakFreezes: 2,
+    lastDailyGoalRewardDate: null,
+    lastStreakRewardDate: null,
     achievements: ACHIEVEMENTS.map((a) => ({
       ...a,
       unlocked: false,
@@ -254,22 +286,41 @@ function startOfDay(ts: number): number {
 function updateStreak(p: UserProfile): UserProfile {
   const today = todayStr();
   if (p.lastStudyDate === today) return p;
+
   if (p.lastStudyDate) {
-    const last = new Date(p.lastStudyDate);
-    const now = new Date(today);
-    const diff = Math.round((now.getTime() - last.getTime()) / 86400000);
+    const diff = daysBetweenDates(p.lastStudyDate, today);
     if (diff === 1) {
-      return { ...p, currentStreak: p.currentStreak + 1, longestStreak: Math.max(p.longestStreak, p.currentStreak + 1), lastStudyDate: today };
-    } else if (diff > 1) {
-      if (p.streakFreezes > 0 && diff === 2) {
-        return { ...p, streakFreezes: p.streakFreezes - 1, lastStudyDate: today };
-      }
-      return { ...p, currentStreak: 1, lastStudyDate: today };
+      const nextStreak = p.currentStreak + 1;
+      return {
+        ...p,
+        currentStreak: nextStreak,
+        longestStreak: Math.max(p.longestStreak, nextStreak),
+        lastStudyDate: today,
+      };
     }
-  } else {
-    return { ...p, currentStreak: 1, lastStudyDate: today };
+    if (diff > 1) {
+      if (p.streakFreezes > 0 && diff === 2) {
+        return {
+          ...p,
+          streakFreezes: p.streakFreezes - 1,
+          lastStudyDate: today,
+        };
+      }
+      return {
+        ...p,
+        currentStreak: 1,
+        longestStreak: Math.max(p.longestStreak, 1),
+        lastStudyDate: today,
+      };
+    }
   }
-  return p;
+
+  return {
+    ...p,
+    currentStreak: 1,
+    longestStreak: Math.max(p.longestStreak, 1),
+    lastStudyDate: today,
+  };
 }
 
 export const store = {
@@ -277,7 +328,20 @@ export const store = {
 
   hydrateStudyData(
     cloudSessions: FocusSession[],
-    cloudStats: { study_time: number; total_sessions: number; level: number } | null,
+    cloudStats: {
+      study_time: number;
+      total_sessions: number;
+      level: number;
+      xp?: number;
+      coins?: number;
+      total_tasks_done?: number;
+      current_streak?: number;
+      longest_streak?: number;
+      last_study_date?: string | null;
+      streak_freezes?: number;
+      last_daily_goal_reward_date?: string | null;
+      last_streak_reward_date?: string | null;
+    } | null,
   ): void {
     setState((s) => {
       const byId = new Map<string, FocusSession>();
@@ -286,11 +350,44 @@ export const store = {
       const sessions = [...byId.values()].sort((a, b) => a.startedAt - b.startedAt);
 
       const sessionStudySec = sessions.reduce((total, session) => total + Math.max(0, session.durationSec), 0);
+      const localStudyDateValue = dateValue(s.profile.lastStudyDate);
+      const cloudStudyDateValue = dateValue(cloudStats?.last_study_date);
+      const cloudStreakIsNewer = cloudStudyDateValue > localStudyDateValue;
+      const sameStudyDate = cloudStudyDateValue > 0 && cloudStudyDateValue === localStudyDateValue;
+      const xp = Math.max(s.profile.xp, Number(cloudStats?.xp ?? 0));
+
       let profile: UserProfile = {
         ...s.profile,
+        xp,
+        coins: Math.max(s.profile.coins, Number(cloudStats?.coins ?? 0)),
         totalStudySec: Math.max(s.profile.totalStudySec, Number(cloudStats?.study_time ?? 0), sessionStudySec),
         totalSessions: Math.max(s.profile.totalSessions, Number(cloudStats?.total_sessions ?? 0), sessions.length),
-        level: Math.max(s.profile.level, Number(cloudStats?.level ?? 1)),
+        totalTasksDone: Math.max(s.profile.totalTasksDone, Number(cloudStats?.total_tasks_done ?? 0)),
+        currentStreak: cloudStreakIsNewer
+          ? Number(cloudStats?.current_streak ?? 0)
+          : sameStudyDate
+            ? Math.max(s.profile.currentStreak, Number(cloudStats?.current_streak ?? 0))
+            : s.profile.currentStreak,
+        longestStreak: Math.max(s.profile.longestStreak, Number(cloudStats?.longest_streak ?? 0)),
+        lastStudyDate: latestDate(s.profile.lastStudyDate, cloudStats?.last_study_date),
+        streakFreezes: cloudStreakIsNewer
+          ? Math.max(0, Number(cloudStats?.streak_freezes ?? s.profile.streakFreezes))
+          : sameStudyDate
+            ? Math.min(s.profile.streakFreezes, Math.max(0, Number(cloudStats?.streak_freezes ?? s.profile.streakFreezes)))
+            : s.profile.streakFreezes,
+        lastDailyGoalRewardDate: latestDate(
+          s.profile.lastDailyGoalRewardDate,
+          cloudStats?.last_daily_goal_reward_date,
+        ),
+        lastStreakRewardDate: latestDate(
+          s.profile.lastStreakRewardDate,
+          cloudStats?.last_streak_reward_date,
+        ),
+        level: Math.max(
+          s.profile.level,
+          Number(cloudStats?.level ?? 1),
+          levelFromXp(xp).level,
+        ),
       };
       profile = recalcAchievements(profile, { ...s, sessions });
 
@@ -312,19 +409,35 @@ export const store = {
     setState((s) => {
       let xpDelta = 0;
       let tasksDoneDelta = 0;
-      const tasks = s.tasks.map((t) => {
-        if (t.id !== id) return t;
-        const done = !t.done;
-        if (done && !t.xpAwarded) {
+      const tasks = s.tasks.map((task) => {
+        if (task.id !== id) return task;
+        const done = !task.done;
+        if (done && !task.xpAwarded) {
           xpDelta += XP_RULES.taskDone;
           tasksDoneDelta = 1;
         }
-        return { ...t, done, completedAt: done ? Date.now() : null, xpAwarded: done ? true : t.xpAwarded };
+        return {
+          ...task,
+          done,
+          completedAt: done ? Date.now() : null,
+          xpAwarded: done ? true : task.xpAwarded,
+        };
       });
-      let profile = { ...s.profile, xp: s.profile.xp + xpDelta, totalTasksDone: s.profile.totalTasksDone + tasksDoneDelta };
+
+      const oldLevel = levelFromXp(s.profile.xp).level;
+      const nextXp = s.profile.xp + xpDelta;
+      const newLevel = levelFromXp(nextXp).level;
+      let profile: UserProfile = {
+        ...s.profile,
+        xp: nextXp,
+        level: newLevel,
+        coins: s.profile.coins + Math.max(0, newLevel - oldLevel) * 20,
+        totalTasksDone: s.profile.totalTasksDone + tasksDoneDelta,
+      };
       profile = recalcAchievements(profile, { ...s, tasks });
       return { ...s, tasks, profile };
     });
+    syncGamificationToCloud();
   },
 
   deleteTask(id: string): void {
@@ -352,11 +465,11 @@ export const store = {
     durationSec: number;
     pomodoroCount: number;
     roomId: string | null;
-  }): { xpEarned: number; leveledUp: boolean; newAchievements: string[] } {
+  }): { xpEarned: number; leveledUp: boolean; newAchievements: string[]; rewardNotes: string[] } {
     const scheduleBlock = state.activeScheduleBlockId
       ? state.blocks.find((block) => block.id === state.activeScheduleBlockId) ?? null
       : null;
-    const xpEarned = Math.max(1, Math.floor(opts.durationSec / 60 / 5) * XP_RULES.sessionPer5Min);
+    const baseXp = Math.max(1, Math.floor(opts.durationSec / 60 / 5) * XP_RULES.sessionPer5Min);
     const session: FocusSession = {
       id: uid(),
       type: opts.type,
@@ -366,35 +479,83 @@ export const store = {
       endedAt: Date.now(),
       durationSec: opts.durationSec,
       pomodoroCount: opts.pomodoroCount,
-      xpEarned,
+      xpEarned: baseXp,
       roomId: opts.roomId,
       scheduleBlockId: scheduleBlock?.id ?? null,
       scheduleBlockTitle: scheduleBlock?.title ?? null,
       ledgerVersion: 1,
     };
-    let result = { xpEarned, leveledUp: false, newAchievements: [] as string[] };
+    let result = {
+      xpEarned: baseXp,
+      leveledUp: false,
+      newAchievements: [] as string[],
+      rewardNotes: [] as string[],
+    };
 
     setState((s) => {
+      const today = todayStr();
       const oldLevel = levelFromXp(s.profile.xp).level;
+      const priorTodaySec = s.sessions
+        .filter((existing) => existing.startedAt >= startOfDay(Date.now()))
+        .reduce((total, existing) => total + existing.durationSec, 0);
+      const dailyGoalSec = Math.max(0, s.settings.dailyGoalMin * 60);
+
       let profile: UserProfile = {
         ...s.profile,
-        xp: s.profile.xp + xpEarned,
         totalStudySec: s.profile.totalStudySec + opts.durationSec,
         totalSessions: s.profile.totalSessions + 1,
       };
+
+      const previousStreak = profile.currentStreak;
       profile = updateStreak(profile);
-      if (profile.currentStreak === 7) profile.xp += XP_RULES.streak7;
+      const streakAdvanced = profile.currentStreak > previousStreak;
+
+      let bonusXp = 0;
+      if (
+        dailyGoalSec > 0 &&
+        priorTodaySec < dailyGoalSec &&
+        priorTodaySec + opts.durationSec >= dailyGoalSec &&
+        profile.lastDailyGoalRewardDate !== today
+      ) {
+        bonusXp += XP_RULES.dailyGoal;
+        profile.lastDailyGoalRewardDate = today;
+        result.rewardNotes.push(`Daily goal +${XP_RULES.dailyGoal} XP`);
+      }
+
+      if (
+        streakAdvanced &&
+        profile.currentStreak > 0 &&
+        profile.currentStreak % 7 === 0 &&
+        profile.lastStreakRewardDate !== today
+      ) {
+        bonusXp += XP_RULES.streak7;
+        profile.lastStreakRewardDate = today;
+        result.rewardNotes.push(`${profile.currentStreak}-day streak +${XP_RULES.streak7} XP`);
+      }
+
+      const totalXpEarned = baseXp + bonusXp;
+      session.xpEarned = totalXpEarned;
+      result.xpEarned = totalXpEarned;
+      profile.xp += totalXpEarned;
+
       const newLevel = levelFromXp(profile.xp).level;
       profile.level = newLevel;
       if (newLevel > oldLevel) {
         profile.coins += 20 * (newLevel - oldLevel);
         result.leveledUp = true;
       }
-      const beforeAch = profile.achievements.filter((a) => a.unlocked).map((a) => a.id);
+
+      const beforeAch = profile.achievements.filter((achievement) => achievement.unlocked).map((achievement) => achievement.id);
       profile = recalcAchievements(profile, { ...s, sessions: [...s.sessions, session] });
-      const afterAch = profile.achievements.filter((a) => a.unlocked).map((a) => a.id);
+      const afterAch = profile.achievements.filter((achievement) => achievement.unlocked).map((achievement) => achievement.id);
       result.newAchievements = afterAch.filter((id) => !beforeAch.includes(id));
-      return { ...s, profile, sessions: [...s.sessions, session], activeScheduleBlockId: null };
+
+      return {
+        ...s,
+        profile,
+        sessions: [...s.sessions, session],
+        activeScheduleBlockId: null,
+      };
     });
 
     if (isSupabaseConfigured && opts.roomId) {
@@ -427,6 +588,7 @@ export const store = {
       }
     }
 
+    syncGamificationToCloud();
     return result;
   },
 
