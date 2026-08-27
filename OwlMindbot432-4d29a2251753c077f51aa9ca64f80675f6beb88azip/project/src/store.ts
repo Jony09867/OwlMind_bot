@@ -469,7 +469,7 @@ export const store = {
     const scheduleBlock = state.activeScheduleBlockId
       ? state.blocks.find((block) => block.id === state.activeScheduleBlockId) ?? null
       : null;
-    const baseXp = Math.max(1, Math.floor(opts.durationSec / 60 / 5) * XP_RULES.sessionPer5Min);
+    const baseXp = Math.max(0, Math.floor(opts.durationSec / 300) * XP_RULES.sessionPer5Min);
     const session: FocusSession = {
       id: uid(),
       type: opts.type,
