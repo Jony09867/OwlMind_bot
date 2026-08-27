@@ -103,6 +103,7 @@ export async function recordFocusSession(
   userId: string,
   session: FocusSession,
   countTowardTotals = true,
+  level = 1,
 ): Promise<{ inserted: boolean; error: Error | null }> {
   try {
     const { data, error } = await supabase.rpc('record_focus_session', {
@@ -120,6 +121,7 @@ export async function recordFocusSession(
       p_schedule_block_id: session.scheduleBlockId ?? null,
       p_schedule_block_title: session.scheduleBlockTitle ?? null,
       p_count_toward_totals: countTowardTotals,
+      p_level: Math.max(1, Math.floor(level)),
     });
     return {
       inserted: Boolean(data),
