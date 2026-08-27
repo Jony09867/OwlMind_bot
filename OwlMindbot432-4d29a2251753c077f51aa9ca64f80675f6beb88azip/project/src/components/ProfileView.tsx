@@ -1,12 +1,21 @@
 import { useState } from 'react';
 import {
   Sparkles, Flame, CheckCircle, BookOpen, GraduationCap, Trophy, Award, Sunrise, Moon, Zap, Star, Target,
-  Settings as SettingsIcon, Moon as MoonIcon, Sun, Monitor, Volume2, Vibrate, Bell, RotateCcw, ChevronRight, Coins, Clock, ListChecks, TrendingUp,
+  Settings as SettingsIcon, Moon as MoonIcon, Sun, Monitor, Volume2, Vibrate, Bell, RotateCcw, ChevronRight,
+  Coins, Clock, ListChecks, TrendingUp, Timer, Watch, Brain,
 } from 'lucide-react';
 import { GlassCard, GlassButton, Badge, Modal, ProgressRing, SegmentedControl } from './ui';
-import { store, useStore, useWeeklyStudySec } from '../store';
-import { levelFromXp, DAILY_GOALS, type ThemeMode } from '../types';
+import { store, useStore } from '../store';
+import { levelFromXp, DAILY_GOALS, type FocusSession, type ThemeMode } from '../types';
 import { fmtHM } from '../hooks';
+
+type StatsPeriod = 'today' | 'week' | 'month' | 'all';
+
+type ActivityBucket = {
+  label: string;
+  sec: number;
+  active: boolean;
+};
 
 const ACH_ICONS: Record<string, any> = {
   sparkles: Sparkles, flame: Flame, 'check-circle': CheckCircle, 'book-open': BookOpen,
@@ -14,25 +23,196 @@ const ACH_ICONS: Record<string, any> = {
   moon: Moon, zap: Zap, star: Star, target: Target,
 };
 
+const PERIOD_OPTIONS: { value: StatsPeriod; label: string }[] = [
+  { value: 'today', label: 'Today' },
+  { value: 'week', label: 'Week' },
+  { value: 'month', label: 'Month' },
+  { value: 'all', label: 'All time' },
+];
+
+function startOfDay(ts: number): number {
+  const date = new Date(ts);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function startOfWeek(ts: number): number {
+  const date = new Date(ts);
+  date.setHours(0, 0, 0, 0);
+  const mondayIndex = (date.getDay() + 6) % 7;
+  date.setDate(date.getDate() - mondayIndex);
+  return date.getTime();
+}
+
+function startOfMonth(ts: number): number {
+  const date = new Date(ts);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(1);
+  return date.getTime();
+}
+
+function periodStart(period: StatsPeriod, now: number): number | null {
+  if (period === 'today') return startOfDay(now);
+  if (period === 'week') return startOfWeek(now);
+  if (period === 'month') return startOfMonth(now);
+  return null;
+}
+
+function sessionsForPeriod(sessions: FocusSession[], period: StatsPeriod, now: number): FocusSession[] {
+  const start = periodStart(period, now);
+  if (start === null) return sessions;
+  return sessions.filter((session) => session.startedAt >= start && session.startedAt <= now);
+}
+
+function buildActivityBuckets(sessions: FocusSession[], period: StatsPeriod, now: number): ActivityBucket[] {
+  if (period === 'today') {
+    const start = startOfDay(now);
+    const buckets = ['00', '04', '08', '12', '16', '20'].map((label, index) => ({
+      label,
+      sec: 0,
+      active: index === Math.min(5, Math.floor((now - start) / (4 * 3600000))),
+    }));
+    sessions.forEach((session) => {
+      if (session.startedAt < start || session.startedAt > now) return;
+      const index = Math.min(5, Math.max(0, Math.floor((session.startedAt - start) / (4 * 3600000))));
+      buckets[index].sec += session.durationSec;
+    });
+    return buckets;
+  }
+
+  if (period === 'week') {
+    const start = startOfWeek(now);
+    const currentIndex = Math.min(6, Math.max(0, Math.floor((startOfDay(now) - start) / 86400000)));
+    const buckets = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((label, index) => ({
+      label,
+      sec: 0,
+      active: index === currentIndex,
+    }));
+    sessions.forEach((session) => {
+      if (session.startedAt < start || session.startedAt >= start + 7 * 86400000) return;
+      const index = Math.min(6, Math.max(0, Math.floor((session.startedAt - start) / 86400000)));
+      buckets[index].sec += session.durationSec;
+    });
+    return buckets;
+  }
+
+  if (period === 'month') {
+    const start = startOfMonth(now);
+    const date = new Date(now);
+    const year = date.getFullYear();
+    const month = date.getMonth();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const bucketCount = Math.ceil(daysInMonth / 7);
+    const currentIndex = Math.min(bucketCount - 1, Math.floor((date.getDate() - 1) / 7));
+    const buckets = Array.from({ length: bucketCount }, (_, index) => {
+      const from = index * 7 + 1;
+      const to = Math.min(daysInMonth, from + 6);
+      return {
+        label: from === to ? String(from) : `${from}–${to}`,
+        sec: 0,
+        active: index === currentIndex,
+      };
+    });
+    sessions.forEach((session) => {
+      const sessionDate = new Date(session.startedAt);
+      if (sessionDate.getFullYear() !== year || sessionDate.getMonth() !== month) return;
+      const index = Math.min(bucketCount - 1, Math.floor((sessionDate.getDate() - 1) / 7));
+      buckets[index].sec += session.durationSec;
+    });
+    return buckets;
+  }
+
+  const current = new Date(now);
+  const monthStarts = Array.from({ length: 6 }, (_, reverseIndex) => {
+    const offset = 5 - reverseIndex;
+    return new Date(current.getFullYear(), current.getMonth() - offset, 1);
+  });
+  const buckets = monthStarts.map((date, index) => ({
+    label: date.toLocaleDateString([], { month: 'short' }).slice(0, 3),
+    sec: 0,
+    active: index === monthStarts.length - 1,
+  }));
+  const firstStart = monthStarts[0].getTime();
+
+  sessions.forEach((session) => {
+    if (session.startedAt < firstStart || session.startedAt > now) return;
+    const sessionDate = new Date(session.startedAt);
+    const monthDistance =
+      (sessionDate.getFullYear() - monthStarts[0].getFullYear()) * 12 +
+      sessionDate.getMonth() -
+      monthStarts[0].getMonth();
+    if (monthDistance >= 0 && monthDistance < buckets.length) {
+      buckets[monthDistance].sec += session.durationSec;
+    }
+  });
+
+  return buckets;
+}
+
 export function ProfileView() {
   const profile = useStore((s) => s.profile);
   const settings = useStore((s) => s.settings);
   const sessions = useStore((s) => s.sessions);
+  const tasks = useStore((s) => s.tasks);
+  const blocks = useStore((s) => s.blocks);
   const [showSettings, setShowSettings] = useState(false);
   const [showReset, setShowReset] = useState(false);
+  const [period, setPeriod] = useState<StatsPeriod>('week');
 
+  const now = Date.now();
   const lvl = levelFromXp(profile.xp);
-  const weekly = useWeeklyStudySec();
-  const weeklyTotal = weekly.reduce((a, b) => a + b, 0);
-  const todayIndex = (new Date().getDay() + 6) % 7;
+  const filteredSessions = sessionsForPeriod(sessions, period, now);
+  const start = periodStart(period, now);
+  const periodStudySec = period === 'all'
+    ? profile.totalStudySec
+    : filteredSessions.reduce((total, session) => total + session.durationSec, 0);
+  const periodSessions = period === 'all' ? profile.totalSessions : filteredSessions.length;
+  const avgSession = periodSessions > 0 ? Math.floor(periodStudySec / periodSessions) : 0;
+  const periodTasksDone = period === 'all'
+    ? profile.totalTasksDone
+    : tasks.filter((task) => task.completedAt !== null && start !== null && task.completedAt >= start && task.completedAt <= now).length;
+
+  const activity = buildActivityBuckets(sessions, period, now);
+  const activityTotal = activity.reduce((total, bucket) => total + bucket.sec, 0);
+  const maxActivity = Math.max(...activity.map((bucket) => bucket.sec), 3600);
+  const activityTitle = period === 'today'
+    ? 'Today Activity'
+    : period === 'week'
+      ? 'This Week'
+      : period === 'month'
+        ? 'This Month'
+        : 'Recent 6 Months';
 
   const subjectMap: Record<string, number> = {};
-  sessions.forEach((s) => { subjectMap[s.subject] = (subjectMap[s.subject] ?? 0) + s.durationSec; });
+  filteredSessions.forEach((session) => {
+    subjectMap[session.subject] = (subjectMap[session.subject] ?? 0) + session.durationSec;
+  });
   const topSubjects = Object.entries(subjectMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
   const maxSubject = topSubjects[0]?.[1] ?? 1;
 
-  const avgSession = sessions.length ? Math.floor(profile.totalStudySec / sessions.length) : 0;
-  const unlockedAch = profile.achievements.filter((a) => a.unlocked).length;
+  const modeTotals = filteredSessions.reduce(
+    (totals, session) => {
+      totals[session.type] += session.durationSec;
+      return totals;
+    },
+    { pomodoro: 0, stopwatch: 0, deep: 0 },
+  );
+  const trackedModeTotal = modeTotals.pomodoro + modeTotals.stopwatch + modeTotals.deep;
+
+  const weekStart = startOfWeek(now);
+  const weekEnd = weekStart + 7 * 86400000;
+  const plannedThisWeek = blocks.reduce(
+    (total, block) => total + Math.max(0, block.endMin - block.startMin) * 60,
+    0,
+  );
+  const studiedFromSchedule = sessions
+    .filter((session) =>
+      Boolean(session.scheduleBlockId) &&
+      session.startedAt >= weekStart &&
+      session.startedAt < weekEnd,
+    )
+    .reduce((total, session) => total + session.durationSec, 0);
+  const scheduleProgress = plannedThisWeek > 0 ? Math.min(studiedFromSchedule / plannedThisWeek, 1) : 0;
 
   return (
     <div className="space-y-5 animate-fade-in pb-4">
@@ -64,49 +244,70 @@ export function ProfileView() {
         </div>
       </GlassCard>
 
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-3">
-        <StatCard icon={Clock} label="Total Study" value={fmtHM(profile.totalStudySec)} accent />
-        <StatCard icon={Target} label="Sessions" value={String(profile.totalSessions)} />
-        <StatCard icon={ListChecks} label="Tasks Done" value={String(profile.totalTasksDone)} />
-        <StatCard icon={TrendingUp} label="Longest Streak" value={`${profile.longestStreak}d`} />
-        <StatCard icon={Flame} label="Current Streak" value={`${profile.currentStreak}d`} accent />
-        <StatCard icon={Trophy} label="Achievements" value={`${unlockedAch}/${profile.achievements.length}`} />
+      {/* Statistics */}
+      <div>
+        <div className="flex items-end justify-between px-1 mb-3">
+          <div>
+            <p className="font-display font-bold text-xl">Statistics</p>
+            <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5">Your real focus activity.</p>
+          </div>
+        </div>
+        <SegmentedControl options={PERIOD_OPTIONS} value={period} onChange={setPeriod} />
       </div>
 
-      {/* Weekly overview */}
+      <div className="grid grid-cols-2 gap-3">
+        <StatCard icon={Clock} label="Study Time" value={fmtHM(periodStudySec)} accent />
+        <StatCard icon={Target} label="Sessions" value={String(periodSessions)} />
+        <StatCard icon={TrendingUp} label="Avg Session" value={fmtHM(avgSession)} />
+        <StatCard icon={ListChecks} label="Tasks Done" value={String(periodTasksDone)} />
+        <StatCard icon={Flame} label="Current Streak" value={`${profile.currentStreak}d`} accent />
+        <StatCard icon={Trophy} label="Best Streak" value={`${profile.longestStreak}d`} />
+      </div>
+
+      {/* One activity graph — Profile only */}
       <GlassCard className="p-5">
         <div className="flex items-center justify-between mb-4">
-          <p className="font-display font-bold text-lg">This Week</p>
-          <Badge color="accent">{fmtHM(weeklyTotal)}</Badge>
+          <p className="font-display font-bold text-lg">{activityTitle}</p>
+          <Badge color="accent">{fmtHM(activityTotal)}</Badge>
         </div>
-        <div className="flex items-end justify-between gap-2 h-24">
-          {weekly.map((sec, i) => {
-            const max = Math.max(...weekly, 3600);
-            const h = Math.max((sec / max) * 100, 4);
-            const today = i === todayIndex;
-            return (
-              <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                <div className="w-full flex-1 flex items-end">
-                  <div className={`w-full rounded-t-lg transition-all duration-500 ${today ? 'bg-accent' : 'bg-accent/40'}`} style={{ height: `${h}%` }} />
+        {activityTotal === 0 ? (
+          <div className="h-24 flex items-center justify-center text-center">
+            <p className="text-sm text-neutralt-500 dark:text-neutralt-400">No study activity in this period yet.</p>
+          </div>
+        ) : (
+          <div className="flex items-end justify-between gap-2 h-28">
+            {activity.map((bucket, index) => {
+              const height = Math.max((bucket.sec / maxActivity) * 100, 4);
+              return (
+                <div key={`${bucket.label}-${index}`} className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
+                  <div className="w-full flex-1 flex items-end">
+                    <div
+                      className={`w-full rounded-t-lg transition-all duration-500 ${bucket.active ? 'bg-accent' : 'bg-accent/40'}`}
+                      style={{ height: `${height}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-neutralt-500 dark:text-neutralt-400 font-medium truncate max-w-full">
+                    {bucket.label}
+                  </span>
                 </div>
-                <span className="text-[10px] text-neutralt-500 dark:text-neutralt-400 font-medium">{['M','T','W','T','F','S','S'][i]}</span>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </GlassCard>
 
       {/* Top subjects */}
-      {topSubjects.length > 0 && (
-        <GlassCard className="p-5">
-          <p className="font-display font-bold text-lg mb-3">Top Subjects</p>
+      <GlassCard className="p-5">
+        <p className="font-display font-bold text-lg mb-3">Top Subjects</p>
+        {topSubjects.length === 0 ? (
+          <p className="text-sm text-neutralt-500 dark:text-neutralt-400 py-4 text-center">No subject data in this period yet.</p>
+        ) : (
           <div className="space-y-2.5">
-            {topSubjects.map(([subj, sec], i) => (
-              <div key={subj}>
+            {topSubjects.map(([subject, sec], index) => (
+              <div key={subject}>
                 <div className="flex items-center justify-between mb-1">
-                  <span className="text-sm font-medium">{i + 1}. {subj}</span>
-                  <span className="text-xs text-neutralt-500 dark:text-neutralt-400">{fmtHM(sec)}</span>
+                  <span className="text-sm font-medium truncate pr-3">{index + 1}. {subject}</span>
+                  <span className="text-xs text-neutralt-500 dark:text-neutralt-400 shrink-0">{fmtHM(sec)}</span>
                 </div>
                 <div className="h-2 rounded-full bg-neutralt-400/20 overflow-hidden">
                   <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${(sec / maxSubject) * 100}%` }} />
@@ -114,9 +315,51 @@ export function ProfileView() {
               </div>
             ))}
           </div>
-          <div className="mt-4 pt-3 border-t border-neutralt-400/20 flex items-center justify-between">
-            <span className="text-xs text-neutralt-500 dark:text-neutralt-400">Avg session</span>
-            <span className="text-sm font-bold">{fmtHM(avgSession)}</span>
+        )}
+      </GlassCard>
+
+      {/* Focus mode distribution */}
+      <GlassCard className="p-5">
+        <div className="flex items-center justify-between mb-3">
+          <p className="font-display font-bold text-lg">Focus Modes</p>
+          <Badge color="neutral">{filteredSessions.length} sessions</Badge>
+        </div>
+        {trackedModeTotal === 0 ? (
+          <p className="text-sm text-neutralt-500 dark:text-neutralt-400 py-4 text-center">Complete a focus session to see your mix.</p>
+        ) : (
+          <div className="space-y-3">
+            <ModeRow icon={Timer} label="Pomodoro" sec={modeTotals.pomodoro} total={trackedModeTotal} tone="accent" />
+            <ModeRow icon={Watch} label="Stopwatch" sec={modeTotals.stopwatch} total={trackedModeTotal} tone="blue" />
+            <ModeRow icon={Brain} label="Deep Focus" sec={modeTotals.deep} total={trackedModeTotal} tone="purple" />
+          </div>
+        )}
+      </GlassCard>
+
+      {/* Schedule progress */}
+      {blocks.length > 0 && (
+        <GlassCard className="p-5">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <p className="font-display font-bold text-lg">Schedule Progress</p>
+              <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5">Planned vs studied this week</p>
+            </div>
+            <Badge color={scheduleProgress >= 1 ? 'green' : 'accent'}>{Math.round(scheduleProgress * 100)}%</Badge>
+          </div>
+          <div className="flex items-end justify-between gap-4 mb-3">
+            <div>
+              <p className="text-xs text-neutralt-500 dark:text-neutralt-400">Studied</p>
+              <p className="font-display text-xl font-bold">{fmtHM(studiedFromSchedule)}</p>
+            </div>
+            <div className="text-right">
+              <p className="text-xs text-neutralt-500 dark:text-neutralt-400">Planned</p>
+              <p className="font-display text-xl font-bold">{fmtHM(plannedThisWeek)}</p>
+            </div>
+          </div>
+          <div className="h-3 rounded-full bg-neutralt-400/20 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-accent to-accent-400 transition-all duration-700"
+              style={{ width: `${scheduleProgress * 100}%` }}
+            />
           </div>
         </GlassCard>
       )}
@@ -125,15 +368,15 @@ export function ProfileView() {
       <GlassCard className="p-5">
         <p className="font-display font-bold text-lg mb-3">Achievements</p>
         <div className="grid grid-cols-3 gap-3">
-          {profile.achievements.map((a) => {
-            const Icon = ACH_ICONS[a.icon] ?? Award;
+          {profile.achievements.map((achievement) => {
+            const Icon = ACH_ICONS[achievement.icon] ?? Award;
             return (
-              <div key={a.id} className={`rounded-2xl p-3 text-center transition-all ${a.unlocked ? 'glass-subtle' : 'bg-neutralt-400/10 opacity-50'}`}>
-                <div className={`w-12 h-12 mx-auto rounded-2xl flex items-center justify-center mb-1.5 ${a.unlocked ? 'bg-accent/15 text-accent' : 'bg-neutralt-400/20 text-neutralt-400'}`}>
+              <div key={achievement.id} className={`rounded-2xl p-3 text-center transition-all ${achievement.unlocked ? 'glass-subtle' : 'bg-neutralt-400/10 opacity-50'}`}>
+                <div className={`w-12 h-12 mx-auto rounded-2xl flex items-center justify-center mb-1.5 ${achievement.unlocked ? 'bg-accent/15 text-accent' : 'bg-neutralt-400/20 text-neutralt-400'}`}>
                   <Icon size={22} />
                 </div>
-                <p className="text-[11px] font-semibold leading-tight">{a.name}</p>
-                <p className="text-[9px] text-neutralt-500 dark:text-neutralt-400 mt-0.5">{a.unlocked ? 'Unlocked' : `${a.progress}/${a.target}`}</p>
+                <p className="text-[11px] font-semibold leading-tight">{achievement.name}</p>
+                <p className="text-[9px] text-neutralt-500 dark:text-neutralt-400 mt-0.5">{achievement.unlocked ? 'Unlocked' : `${achievement.progress}/${achievement.target}`}</p>
               </div>
             );
           })}
@@ -152,22 +395,22 @@ export function ProfileView() {
                 { value: 'system', label: 'Auto', icon: Monitor },
               ]}
               value={settings.theme}
-              onChange={(v: ThemeMode) => store.updateSettings({ theme: v })}
+              onChange={(value: ThemeMode) => store.updateSettings({ theme: value })}
             />
           </div>
           <div>
             <p className="text-sm font-semibold mb-2">Daily Goal</p>
             <div className="grid grid-cols-4 gap-2">
-              {DAILY_GOALS.map((g) => (
-                <button key={g.min} onClick={() => store.updateSettings({ dailyGoalMin: g.min })} className={`py-3 rounded-2xl font-bold text-sm glass-press transition-all ${settings.dailyGoalMin === g.min ? 'bg-accent text-white shadow-glow' : 'glass-subtle'}`}>{g.label}</button>
+              {DAILY_GOALS.map((goal) => (
+                <button key={goal.min} onClick={() => store.updateSettings({ dailyGoalMin: goal.min })} className={`py-3 rounded-2xl font-bold text-sm glass-press transition-all ${settings.dailyGoalMin === goal.min ? 'bg-accent text-white shadow-glow' : 'glass-subtle'}`}>{goal.label}</button>
               ))}
             </div>
           </div>
           <div className="space-y-2">
             <p className="text-sm font-semibold">Notifications</p>
-            <ToggleRow icon={Volume2} label="Sound" value={settings.soundEnabled} onChange={(v) => store.updateSettings({ soundEnabled: v })} />
-            <ToggleRow icon={Vibrate} label="Vibration" value={settings.vibrationEnabled} onChange={(v) => store.updateSettings({ vibrationEnabled: v })} />
-            <ToggleRow icon={Bell} label="Daily goal reminder" value={settings.dailyGoalReminder} onChange={(v) => store.updateSettings({ dailyGoalReminder: v })} />
+            <ToggleRow icon={Volume2} label="Sound" value={settings.soundEnabled} onChange={(value) => store.updateSettings({ soundEnabled: value })} />
+            <ToggleRow icon={Vibrate} label="Vibration" value={settings.vibrationEnabled} onChange={(value) => store.updateSettings({ vibrationEnabled: value })} />
+            <ToggleRow icon={Bell} label="Daily goal reminder" value={settings.dailyGoalReminder} onChange={(value) => store.updateSettings({ dailyGoalReminder: value })} />
           </div>
           <button onClick={() => { setShowSettings(false); setShowReset(true); }} className="w-full flex items-center justify-between glass-subtle rounded-2xl px-4 py-3 text-red-500 glass-press">
             <span className="flex items-center gap-2 text-sm font-medium"><RotateCcw size={16} /> Reset all data</span>
@@ -199,7 +442,48 @@ function StatCard({ icon: Icon, label, value, accent = false }: { icon: any; lab
   );
 }
 
-function ToggleRow({ icon: Icon, label, value, onChange }: { icon: any; label: string; value: boolean; onChange: (v: boolean) => void }) {
+function ModeRow({
+  icon: Icon,
+  label,
+  sec,
+  total,
+  tone,
+}: {
+  icon: any;
+  label: string;
+  sec: number;
+  total: number;
+  tone: 'accent' | 'blue' | 'purple';
+}) {
+  const progress = total > 0 ? (sec / total) * 100 : 0;
+  const iconClass = tone === 'accent'
+    ? 'bg-accent/15 text-accent'
+    : tone === 'blue'
+      ? 'bg-blue-500/15 text-blue-500'
+      : 'bg-purple-500/15 text-purple-500';
+  const barClass = tone === 'accent'
+    ? 'bg-accent'
+    : tone === 'blue'
+      ? 'bg-blue-500'
+      : 'bg-purple-500';
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-1.5">
+        <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${iconClass}`}>
+          <Icon size={15} />
+        </div>
+        <span className="text-sm font-medium flex-1">{label}</span>
+        <span className="text-xs text-neutralt-500 dark:text-neutralt-400">{fmtHM(sec)}</span>
+      </div>
+      <div className="h-2 rounded-full bg-neutralt-400/20 overflow-hidden ml-11">
+        <div className={`h-full rounded-full transition-all duration-500 ${barClass}`} style={{ width: `${progress}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function ToggleRow({ icon: Icon, label, value, onChange }: { icon: any; label: string; value: boolean; onChange: (value: boolean) => void }) {
   return (
     <button onClick={() => onChange(!value)} className="w-full flex items-center justify-between glass-subtle rounded-2xl px-4 py-3 glass-press">
       <span className="flex items-center gap-2 text-sm font-medium"><Icon size={16} className="text-neutralt-500" />{label}</span>
