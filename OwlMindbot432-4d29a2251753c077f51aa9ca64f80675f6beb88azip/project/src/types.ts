@@ -123,8 +123,6 @@ export type RankingScope =
   | 'daily'
   | 'weekly'
   | 'monthly'
-  | 'seasonal'
-  | 'friends'
   | 'room'
   | 'global';
 
