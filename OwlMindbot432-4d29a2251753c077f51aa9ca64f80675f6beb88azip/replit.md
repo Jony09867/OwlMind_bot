@@ -21,6 +21,12 @@ are added:
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `TELEGRAM_BOT_TOKEN`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+`SUPABASE_SERVICE_ROLE_KEY` is server-only. Never expose it through a
+`VITE_`-prefixed variable or commit it to the repository. The Telegram auth
+endpoint uses it only after validating Telegram's signed `initData` payload.
 
 After changing Vercel environment variables, create a new deployment so Vite
 includes them in the frontend build. Use the resulting HTTPS deployment URL

@@ -97,7 +97,6 @@ function buildActivityBuckets(sessions: FocusSession[], period: StatsPeriod, now
   }
 
   if (period === 'month') {
-    const start = startOfMonth(now);
     const date = new Date(now);
     const year = date.getFullYear();
     const month = date.getMonth();

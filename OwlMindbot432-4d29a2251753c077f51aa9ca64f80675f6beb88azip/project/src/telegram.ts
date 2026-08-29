@@ -1,3 +1,5 @@
+import { isSupabaseAvailable, setSupabaseAuthenticated, supabase } from './lib/supabase';
+
 // Telegram WebApp utilities
 declare global {
   interface Window {
@@ -41,8 +43,66 @@ declare global {
   }
 }
 
+export type VerifiedTelegramUser = {
+  id: string;
+  first_name: string;
+  username: string | null;
+  photo_url: string | null;
+};
+
+let verifiedTelegramUser: VerifiedTelegramUser | null = null;
+
+export async function authenticateTelegram(): Promise<boolean> {
+  if (!isSupabaseAvailable) return false;
+  const initData = window.Telegram?.WebApp?.initData;
+  if (!initData) {
+    setSupabaseAuthenticated(false);
+    return false;
+  }
+
+  try {
+    const response = await fetch('/api/telegram-auth', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ initData }),
+      credentials: 'same-origin',
+    });
+    const payload = await response.json() as {
+      ok?: boolean;
+      tokenHash?: string;
+      user?: VerifiedTelegramUser;
+      error?: string;
+    };
+    if (!response.ok || !payload.ok || !payload.tokenHash || !payload.user) {
+      throw new Error(payload.error || 'Telegram authentication failed');
+    }
+
+    const { data, error } = await supabase.auth.verifyOtp({
+      token_hash: payload.tokenHash,
+      type: 'magiclink',
+    });
+    if (error || !data.session) throw error ?? new Error('Supabase session was not created');
+
+    const telegramId = data.session.user.app_metadata?.telegram_user_id;
+    if (String(telegramId ?? '') !== payload.user.id) {
+      await supabase.auth.signOut();
+      throw new Error('Authenticated Telegram identity does not match');
+    }
+
+    verifiedTelegramUser = payload.user;
+    setSupabaseAuthenticated(true);
+    return true;
+  } catch (error) {
+    console.error('Telegram authentication failed', error);
+    verifiedTelegramUser = null;
+    setSupabaseAuthenticated(false);
+    return false;
+  }
+}
+
 export function getTelegramUserId(): string | null {
   try {
+    if (verifiedTelegramUser) return verifiedTelegramUser.id;
     const u = window.Telegram?.WebApp?.initDataUnsafe?.user;
     return u ? String(u.id) : null;
   } catch {
@@ -52,6 +112,7 @@ export function getTelegramUserId(): string | null {
 
 export function getTelegramUserName(): string | null {
   try {
+    if (verifiedTelegramUser) return verifiedTelegramUser.first_name || verifiedTelegramUser.username;
     const u = window.Telegram?.WebApp?.initDataUnsafe?.user;
     if (!u) return null;
     return u.first_name || u.username || null;
@@ -60,8 +121,9 @@ export function getTelegramUserName(): string | null {
   }
 }
 
-export function getTelegramUser(): { id: string; first_name: string; username: string | null; photo_url: string | null } | null {
+export function getTelegramUser(): VerifiedTelegramUser | null {
   try {
+    if (verifiedTelegramUser) return verifiedTelegramUser;
     const u = window.Telegram?.WebApp?.initDataUnsafe?.user;
     if (!u) return null;
     return {
@@ -87,13 +149,17 @@ export function initTelegram(): void {
   try {
     window.Telegram?.WebApp?.ready();
     window.Telegram?.WebApp?.expand();
-  } catch {}
+  } catch {
+    // Telegram SDK is optional outside the Mini App client.
+  }
 }
 
 export function hapticImpact(style: 'light' | 'medium' | 'heavy' = 'light'): void {
   try {
     window.Telegram?.WebApp?.HapticFeedback?.impactOccurred(style);
-  } catch {}
+  } catch {
+    // Haptics are best-effort on unsupported Telegram clients.
+  }
 }
 
 export function openTelegramLink(url: string): void {
