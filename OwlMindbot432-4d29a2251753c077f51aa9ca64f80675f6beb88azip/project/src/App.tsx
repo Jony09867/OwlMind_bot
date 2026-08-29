@@ -69,9 +69,14 @@ export default function App() {
     return () => { cancelled = true; };
   }, []);
   const [tab, setTab] = useState<Tab>(() => {
-    const joinParam = new URLSearchParams(window.location.search).get('join');
+    const params = new URLSearchParams(window.location.search);
+    const joinParam = params.get('join');
+    const raceParam = params.get('race');
     const startParam = getTelegramStartParam();
-    return joinParam || startParam?.startsWith('room_') ? 'rooms' : 'focus';
+
+    if (joinParam || startParam?.startsWith('room_')) return 'rooms';
+    if (raceParam || startParam?.startsWith('race_')) return 'rankings';
+    return 'focus';
   });
   const streak = useStore((s) => s.profile.currentStreak);
 
