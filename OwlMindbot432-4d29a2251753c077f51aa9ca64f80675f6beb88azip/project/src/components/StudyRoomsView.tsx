@@ -1550,6 +1550,12 @@ function RoomFiles({ roomId, userId, userName, userAvatar }: { roomId: string; u
     if (!isSupabaseConfigured) return;
 
     let active = true;
+    const withSignedUrl = async (file: RoomFileRow): Promise<RoomFileRow> => {
+      if (/^https?:\/\//i.test(file.file_url)) return file;
+      const { data } = await supabase.storage.from('room-files').createSignedUrl(file.file_url, 60 * 60);
+      return data?.signedUrl ? { ...file, file_url: data.signedUrl } : file;
+    };
+
     void (async () => {
       const { data, error } = await supabase.from('room_files').select('*').eq('room_id', roomId).order('created_at', { ascending: false }).limit(100);
       if (!active) return;
@@ -1557,14 +1563,16 @@ function RoomFiles({ roomId, userId, userName, userAvatar }: { roomId: string; u
         setErrorMsg('Files yuklanmadi.');
         return;
       }
-      setFiles((data ?? []) as RoomFileRow[]);
+      const signedFiles = await Promise.all(((data ?? []) as RoomFileRow[]).map(withSignedUrl));
+      if (active) setFiles(signedFiles);
     })();
 
     const channel = supabase
       .channel(`room_files_${roomId}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'room_files', filter: `room_id=eq.${roomId}` }, (payload) => {
-        const incoming = payload.new as RoomFileRow;
-        setFiles((current) => current.some((file) => file.id === incoming.id) ? current : [incoming, ...current]);
+        void withSignedUrl(payload.new as RoomFileRow).then((incoming) => {
+          if (active) setFiles((current) => current.some((file) => file.id === incoming.id) ? current : [incoming, ...current]);
+        });
       })
       .subscribe();
 
@@ -1589,14 +1597,13 @@ function RoomFiles({ roomId, userId, userName, userAvatar }: { roomId: string; u
         return;
       }
 
-      const { data: publicData } = supabase.storage.from('room-files').getPublicUrl(path);
       const { error: rowError } = await supabase.from('room_files').insert({
         room_id: roomId,
         user_id: userId,
         user_name: userName,
         user_avatar: userAvatar,
         file_name: file.name,
-        file_url: publicData.publicUrl,
+        file_url: path,
         file_type: file.type.startsWith('image/') ? 'image' : 'file',
         file_size: file.size,
       });

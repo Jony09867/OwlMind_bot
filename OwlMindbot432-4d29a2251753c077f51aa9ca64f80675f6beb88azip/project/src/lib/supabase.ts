@@ -4,13 +4,18 @@ import type { FocusSession, UserProfile } from '../types';
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-export const isSupabaseConfigured = Boolean(url && anonKey);
+export const isSupabaseAvailable = Boolean(url && anonKey);
+export let isSupabaseConfigured = false;
+
+export function setSupabaseAuthenticated(authenticated: boolean): void {
+  isSupabaseConfigured = isSupabaseAvailable && authenticated;
+}
 
 export const supabase = createClient(
   url || 'https://placeholder.supabase.co',
   anonKey || 'placeholder-anon-key',
   {
-    auth: { persistSession: false, autoRefreshToken: false },
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
   },
 );
 
@@ -48,13 +53,15 @@ export function generateRoomCode(): string {
 
 export async function upsertTelegramUser(user: TelegramUser): Promise<{ error: Error | null }> {
   try {
-    const { error } = await supabase.from('users').upsert({
-      id: user.id,
-      first_name: user.first_name,
-      username: user.username,
-      photo_url: user.photo_url,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'id' });
+    const { error } = await supabase
+      .from('users')
+      .update({
+        first_name: user.first_name,
+        username: user.username,
+        photo_url: user.photo_url,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', user.id);
     return { error: error ? new Error(error.message) : null };
   } catch (cause) {
     return { error: cause instanceof Error ? cause : new Error('Network error') };
