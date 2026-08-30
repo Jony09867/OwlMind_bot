@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "test:auth": "node --test server/telegram-init-data.test.js",
+    "test:timer": "node --test src/lib/timer.test.js",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json"
   },
@@ -34,3 +35,4 @@
     "vite": "^5.4.2"
   }
 }
+
