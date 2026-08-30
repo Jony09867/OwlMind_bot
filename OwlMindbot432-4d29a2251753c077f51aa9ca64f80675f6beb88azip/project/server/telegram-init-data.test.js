@@ -62,4 +62,3 @@ test('rejects expired Telegram initData', () => {
   const stale = signedInitData({ auth_date: String(Math.floor(nowMs / 1000) - 3600) });
   assert.throws(() => validateTelegramInitData(stale, botToken, { nowMs }), /expired/i);
 });
-
