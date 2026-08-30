@@ -4,6 +4,7 @@ import {
   Settings as SettingsIcon, Moon as MoonIcon, Sun, Monitor, Volume2, Vibrate, Bell, RotateCcw, ChevronRight,
   Coins, Clock, ListChecks, TrendingUp, Timer, Watch, Brain,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { GlassCard, GlassButton, Badge, Modal, ProgressRing, SegmentedControl } from './ui';
 import { store, useStore } from '../store';
 import { levelFromXp, DAILY_GOALS, type FocusSession, type ThemeMode } from '../types';
@@ -13,11 +14,12 @@ type StatsPeriod = 'today' | 'week' | 'month' | 'all';
 
 type ActivityBucket = {
   label: string;
+  detail: string;
   sec: number;
   active: boolean;
 };
 
-const ACH_ICONS: Record<string, any> = {
+const ACH_ICONS: Record<string, LucideIcon> = {
   sparkles: Sparkles, flame: Flame, 'check-circle': CheckCircle, 'book-open': BookOpen,
   'graduation-cap': GraduationCap, trophy: Trophy, award: Award, sunrise: Sunrise,
   moon: Moon, zap: Zap, star: Star, target: Target,
@@ -64,11 +66,17 @@ function sessionsForPeriod(sessions: FocusSession[], period: StatsPeriod, now: n
   return sessions.filter((session) => session.startedAt >= start && session.startedAt <= now);
 }
 
+function fmtStatTime(sec: number): string {
+  if (sec > 0 && sec < 60) return '<1m';
+  return fmtHM(sec);
+}
+
 function buildActivityBuckets(sessions: FocusSession[], period: StatsPeriod, now: number): ActivityBucket[] {
   if (period === 'today') {
     const start = startOfDay(now);
     const buckets = ['00', '04', '08', '12', '16', '20'].map((label, index) => ({
       label,
+      detail: `${label}:00–${String((index + 1) * 4).padStart(2, '0')}:00`,
       sec: 0,
       active: index === Math.min(5, Math.floor((now - start) / (4 * 3600000))),
     }));
@@ -85,6 +93,11 @@ function buildActivityBuckets(sessions: FocusSession[], period: StatsPeriod, now
     const currentIndex = Math.min(6, Math.max(0, Math.floor((startOfDay(now) - start) / 86400000)));
     const buckets = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((label, index) => ({
       label,
+      detail: new Date(start + index * 86400000).toLocaleDateString('en-US', {
+        weekday: 'long',
+        month: 'short',
+        day: 'numeric',
+      }),
       sec: 0,
       active: index === currentIndex,
     }));
@@ -108,6 +121,7 @@ function buildActivityBuckets(sessions: FocusSession[], period: StatsPeriod, now
       const to = Math.min(daysInMonth, from + 6);
       return {
         label: from === to ? String(from) : `${from}–${to}`,
+        detail: `${date.toLocaleDateString('en-US', { month: 'short' })} ${from}${from === to ? '' : `–${to}`}`,
         sec: 0,
         active: index === currentIndex,
       };
@@ -122,27 +136,52 @@ function buildActivityBuckets(sessions: FocusSession[], period: StatsPeriod, now
   }
 
   const current = new Date(now);
-  const monthStarts = Array.from({ length: 6 }, (_, reverseIndex) => {
-    const offset = 5 - reverseIndex;
-    return new Date(current.getFullYear(), current.getMonth() - offset, 1);
-  });
-  const buckets = monthStarts.map((date, index) => ({
-    label: date.toLocaleDateString([], { month: 'short' }).slice(0, 3),
-    sec: 0,
-    active: index === monthStarts.length - 1,
-  }));
-  const firstStart = monthStarts[0].getTime();
+  const eligibleSessions = sessions.filter((session) => session.startedAt <= now);
+  const firstSessionAt = eligibleSessions.reduce(
+    (earliest, session) => Math.min(earliest, session.startedAt),
+    now,
+  );
+  const firstSession = new Date(firstSessionAt);
+  const firstMonth = new Date(firstSession.getFullYear(), firstSession.getMonth(), 1);
+  const totalMonths =
+    (current.getFullYear() - firstMonth.getFullYear()) * 12 +
+    current.getMonth() -
+    firstMonth.getMonth() +
+    1;
+  const monthsPerBucket = Math.max(1, Math.ceil(totalMonths / 6));
+  const bucketCount = Math.ceil(totalMonths / monthsPerBucket);
+  const buckets = Array.from({ length: bucketCount }, (_, index) => {
+    const startOffset = index * monthsPerBucket;
+    const endOffset = Math.min(totalMonths - 1, startOffset + monthsPerBucket - 1);
+    const from = new Date(firstMonth.getFullYear(), firstMonth.getMonth() + startOffset, 1);
+    const to = new Date(firstMonth.getFullYear(), firstMonth.getMonth() + endOffset, 1);
+    const singleMonth = startOffset === endOffset;
+    const sameYear = from.getFullYear() === to.getFullYear();
+    const fromMonth = from.toLocaleDateString('en-US', { month: 'short' });
+    const toMonth = to.toLocaleDateString('en-US', { month: 'short' });
 
-  sessions.forEach((session) => {
-    if (session.startedAt < firstStart || session.startedAt > now) return;
+    return {
+      label: singleMonth
+        ? fromMonth
+        : sameYear
+          ? `${fromMonth}–${toMonth}`
+          : `${String(from.getFullYear()).slice(-2)}–${String(to.getFullYear()).slice(-2)}`,
+      detail: singleMonth
+        ? from.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+        : `${from.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}–${to.toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}`,
+      sec: 0,
+      active: index === bucketCount - 1,
+    };
+  });
+
+  eligibleSessions.forEach((session) => {
     const sessionDate = new Date(session.startedAt);
     const monthDistance =
-      (sessionDate.getFullYear() - monthStarts[0].getFullYear()) * 12 +
+      (sessionDate.getFullYear() - firstMonth.getFullYear()) * 12 +
       sessionDate.getMonth() -
-      monthStarts[0].getMonth();
-    if (monthDistance >= 0 && monthDistance < buckets.length) {
-      buckets[monthDistance].sec += session.durationSec;
-    }
+      firstMonth.getMonth();
+    const index = Math.floor(monthDistance / monthsPerBucket);
+    if (index >= 0 && index < buckets.length) buckets[index].sec += session.durationSec;
   });
 
   return buckets;
@@ -157,6 +196,7 @@ export function ProfileView() {
   const [showSettings, setShowSettings] = useState(false);
   const [showReset, setShowReset] = useState(false);
   const [period, setPeriod] = useState<StatsPeriod>('week');
+  const [selectedActivityIndex, setSelectedActivityIndex] = useState<number | null>(null);
 
   const now = Date.now();
   const lvl = levelFromXp(profile.xp);
@@ -173,14 +213,41 @@ export function ProfileView() {
 
   const activity = buildActivityBuckets(sessions, period, now);
   const activityTotal = activity.reduce((total, bucket) => total + bucket.sec, 0);
-  const maxActivity = Math.max(...activity.map((bucket) => bucket.sec), 3600);
+  const maxActivity = Math.max(...activity.map((bucket) => bucket.sec), 1);
+  const bestActivityIndex = activity.reduce(
+    (bestIndex, bucket, index) => bucket.sec > activity[bestIndex].sec ? index : bestIndex,
+    0,
+  );
+  const visibleActivityIndex = selectedActivityIndex !== null && activity[selectedActivityIndex]
+    ? selectedActivityIndex
+    : bestActivityIndex;
+  const selectedActivity = activity[visibleActivityIndex];
   const activityTitle = period === 'today'
     ? 'Today Activity'
     : period === 'week'
       ? 'This Week'
       : period === 'month'
         ? 'This Month'
-        : 'Recent 6 Months';
+        : 'All-time Trend';
+  const averageDivisor = period === 'today'
+    ? Math.max(1, new Date(now).getHours() + 1)
+    : period === 'week'
+      ? ((new Date(now).getDay() + 6) % 7) + 1
+      : period === 'month'
+        ? new Date(now).getDate()
+        : Math.max(1, Math.floor((startOfDay(now) - startOfDay(
+          sessions.reduce((earliest, session) => Math.min(earliest, session.startedAt), now),
+        )) / 86400000) + 1);
+  const averageStudySec = Math.floor(periodStudySec / averageDivisor);
+  const averageLabel = period === 'today' ? 'Hourly average' : 'Daily average';
+  const bestLabel = period === 'today'
+    ? 'Best time'
+    : period === 'week'
+      ? 'Best day'
+      : period === 'month'
+        ? 'Best week'
+        : 'Best period';
+  const periodLabel = PERIOD_OPTIONS.find((option) => option.value === period)?.label ?? 'Week';
 
   const subjectMap: Record<string, number> = {};
   filteredSessions.forEach((session) => {
@@ -251,13 +318,20 @@ export function ProfileView() {
             <p className="text-xs text-neutralt-500 dark:text-neutralt-400 mt-0.5">Your real focus activity.</p>
           </div>
         </div>
-        <SegmentedControl options={PERIOD_OPTIONS} value={period} onChange={setPeriod} />
+        <SegmentedControl
+          options={PERIOD_OPTIONS}
+          value={period}
+          onChange={(nextPeriod) => {
+            setPeriod(nextPeriod);
+            setSelectedActivityIndex(null);
+          }}
+        />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <StatCard icon={Clock} label="Study Time" value={fmtHM(periodStudySec)} accent />
+        <StatCard icon={Clock} label="Study Time" value={fmtStatTime(periodStudySec)} accent />
         <StatCard icon={Target} label="Sessions" value={String(periodSessions)} />
-        <StatCard icon={TrendingUp} label="Avg Session" value={fmtHM(avgSession)} />
+        <StatCard icon={TrendingUp} label="Avg Session" value={fmtStatTime(avgSession)} />
         <StatCard icon={ListChecks} label="Tasks Done" value={String(periodTasksDone)} />
         <StatCard icon={Flame} label="Current Streak" value={`${profile.currentStreak}d`} accent />
         <StatCard icon={Trophy} label="Best Streak" value={`${profile.longestStreak}d`} />
@@ -267,37 +341,75 @@ export function ProfileView() {
       <GlassCard className="p-5">
         <div className="flex items-center justify-between mb-4">
           <p className="font-display font-bold text-lg">{activityTitle}</p>
-          <Badge color="accent">{fmtHM(activityTotal)}</Badge>
+          <Badge color="accent">{fmtStatTime(periodStudySec)}</Badge>
         </div>
         {activityTotal === 0 ? (
           <div className="h-24 flex items-center justify-center text-center">
             <p className="text-sm text-neutralt-500 dark:text-neutralt-400">No study activity in this period yet.</p>
           </div>
         ) : (
-          <div className="flex items-end justify-between gap-2 h-28">
-            {activity.map((bucket, index) => {
-              const height = Math.max((bucket.sec / maxActivity) * 100, 4);
-              return (
-                <div key={`${bucket.label}-${index}`} className="flex-1 flex flex-col items-center gap-1.5 min-w-0">
-                  <div className="w-full flex-1 flex items-end">
-                    <div
-                      className={`w-full rounded-t-lg transition-all duration-500 ${bucket.active ? 'bg-accent' : 'bg-accent/40'}`}
+          <div>
+            <div className="glass-subtle rounded-xl px-3 py-2 mb-3 flex items-center justify-between gap-3">
+              <span className="text-xs text-neutralt-500 dark:text-neutralt-400 truncate">{selectedActivity.detail}</span>
+              <span className="text-sm font-bold shrink-0">{fmtStatTime(selectedActivity.sec)}</span>
+            </div>
+            <div
+              className="grid h-24 items-end gap-2"
+              style={{ gridTemplateColumns: `repeat(${activity.length}, minmax(0, 1fr))` }}
+            >
+              {activity.map((bucket, index) => {
+                const height = bucket.sec > 0 ? Math.max((bucket.sec / maxActivity) * 100, 8) : 3;
+                const selected = index === visibleActivityIndex;
+                return (
+                  <button
+                    key={`${bucket.label}-${index}`}
+                    type="button"
+                    onClick={() => setSelectedActivityIndex(index)}
+                    className="h-full min-w-0 flex items-end rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                    aria-label={`${bucket.detail}: ${fmtStatTime(bucket.sec)}`}
+                    aria-pressed={selected}
+                  >
+                    <span
+                      className={`block w-full rounded-t-lg transition-all duration-500 ${selected ? 'bg-accent' : bucket.active ? 'bg-accent/70' : 'bg-accent/35'}`}
                       style={{ height: `${height}%` }}
                     />
-                  </div>
-                  <span className="text-[10px] text-neutralt-500 dark:text-neutralt-400 font-medium truncate max-w-full">
-                    {bucket.label}
-                  </span>
-                </div>
-              );
-            })}
+                  </button>
+                );
+              })}
+            </div>
+            <div
+              className="grid gap-2 mt-1.5"
+              style={{ gridTemplateColumns: `repeat(${activity.length}, minmax(0, 1fr))` }}
+            >
+              {activity.map((bucket, index) => (
+                <span
+                  key={`${bucket.label}-label-${index}`}
+                  className={`text-[10px] font-medium text-center truncate ${index === visibleActivityIndex ? 'text-accent' : 'text-neutralt-500 dark:text-neutralt-400'}`}
+                >
+                  {bucket.label}
+                </span>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-3 mt-4 pt-3 border-t border-neutralt-400/15">
+              <div>
+                <p className="text-[10px] text-neutralt-500 dark:text-neutralt-400">{averageLabel}</p>
+                <p className="text-sm font-bold mt-0.5">{fmtStatTime(averageStudySec)}</p>
+              </div>
+              <div className="text-right">
+                <p className="text-[10px] text-neutralt-500 dark:text-neutralt-400">{bestLabel}</p>
+                <p className="text-sm font-bold mt-0.5 truncate">{activity[bestActivityIndex].label} · {fmtStatTime(activity[bestActivityIndex].sec)}</p>
+              </div>
+            </div>
           </div>
         )}
       </GlassCard>
 
       {/* Top subjects */}
       <GlassCard className="p-5">
-        <p className="font-display font-bold text-lg mb-3">Top Subjects</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="font-display font-bold text-lg">Top Subjects</p>
+          <Badge color="neutral">{periodLabel}</Badge>
+        </div>
         {topSubjects.length === 0 ? (
           <p className="text-sm text-neutralt-500 dark:text-neutralt-400 py-4 text-center">No subject data in this period yet.</p>
         ) : (
@@ -306,7 +418,7 @@ export function ProfileView() {
               <div key={subject}>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-sm font-medium truncate pr-3">{index + 1}. {subject}</span>
-                  <span className="text-xs text-neutralt-500 dark:text-neutralt-400 shrink-0">{fmtHM(sec)}</span>
+                  <span className="text-xs text-neutralt-500 dark:text-neutralt-400 shrink-0">{fmtStatTime(sec)}</span>
                 </div>
                 <div className="h-2 rounded-full bg-neutralt-400/20 overflow-hidden">
                   <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${(sec / maxSubject) * 100}%` }} />
@@ -429,7 +541,7 @@ export function ProfileView() {
   );
 }
 
-function StatCard({ icon: Icon, label, value, accent = false }: { icon: any; label: string; value: string; accent?: boolean }) {
+function StatCard({ icon: Icon, label, value, accent = false }: { icon: LucideIcon; label: string; value: string; accent?: boolean }) {
   return (
     <GlassCard className="p-4">
       <div className={`w-9 h-9 rounded-xl flex items-center justify-center mb-2 ${accent ? 'bg-accent/15 text-accent' : 'bg-neutralt-400/15 text-neutralt-600 dark:text-neutralt-300'}`}>
@@ -448,7 +560,7 @@ function ModeRow({
   total,
   tone,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   sec: number;
   total: number;
@@ -482,7 +594,7 @@ function ModeRow({
   );
 }
 
-function ToggleRow({ icon: Icon, label, value, onChange }: { icon: any; label: string; value: boolean; onChange: (value: boolean) => void }) {
+function ToggleRow({ icon: Icon, label, value, onChange }: { icon: LucideIcon; label: string; value: boolean; onChange: (value: boolean) => void }) {
   return (
     <button onClick={() => onChange(!value)} className="w-full flex items-center justify-between glass-subtle rounded-2xl px-4 py-3 glass-press">
       <span className="flex items-center gap-2 text-sm font-medium"><Icon size={16} className="text-neutralt-500" />{label}</span>
@@ -492,3 +604,4 @@ function ToggleRow({ icon: Icon, label, value, onChange }: { icon: any; label: s
     </button>
   );
 }
+
