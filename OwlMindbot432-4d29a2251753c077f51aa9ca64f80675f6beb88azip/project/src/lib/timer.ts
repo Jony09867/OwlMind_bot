@@ -7,4 +7,3 @@ export function calculateElapsedSeconds(
   if (startedAtMs === null) return safeBase;
   return safeBase + Math.max(0, nowMs - startedAtMs) / 1000;
 }
-
