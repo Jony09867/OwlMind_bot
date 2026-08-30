@@ -92,6 +92,7 @@ export function ScheduleView({ onStartFocus }: { onStartFocus: (blockId: string)
 function BlockRow({ block, studiedSec, onStart }: { block: StudyBlock; studiedSec: number; onStart: () => void }) {
   const plannedSec = Math.max(0, block.endMin - block.startMin) * 60;
   const completed = plannedSec > 0 && studiedSec >= plannedSec;
+  const studiedLabel = studiedSec < 60 ? '<1m' : fmtHM(studiedSec);
 
   return (
     <GlassCard className="p-3.5 flex items-center gap-3">
@@ -108,7 +109,7 @@ function BlockRow({ block, studiedSec, onStart }: { block: StudyBlock; studiedSe
         {studiedSec > 0 && (
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
             <span className="text-[10px] font-semibold text-neutralt-500 dark:text-neutralt-400">
-              Studied {fmtHM(studiedSec)}{plannedSec > 0 ? ` / ${fmtHM(plannedSec)}` : ''}
+              Studied {studiedLabel}{plannedSec > 0 ? ` / ${fmtHM(plannedSec)}` : ''}
             </span>
             {completed && <Badge color="green">Completed</Badge>}
           </div>
@@ -182,3 +183,4 @@ function AddBlockModal({ open, onClose }: { open: boolean; onClose: () => void }
     </Modal>
   );
 }
+
