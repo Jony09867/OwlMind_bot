@@ -183,4 +183,3 @@ function AddBlockModal({ open, onClose }: { open: boolean; onClose: () => void }
     </Modal>
   );
 }
-
