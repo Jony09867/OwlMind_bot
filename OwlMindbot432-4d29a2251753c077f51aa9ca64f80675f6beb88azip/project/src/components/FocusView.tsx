@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Play, Pause, Square, RotateCcw, Timer, Watch, Brain, ChevronDown, Check, Volume2, Vibrate, Bell } from 'lucide-react';
+import { Play, Pause, Square, RotateCcw, Timer, Watch, Brain, ChevronDown, Check, Volume2, Vibrate, Bell, type LucideIcon } from 'lucide-react';
 import { GlassCard, GlassButton, ProgressRing, SegmentedControl, Modal, Badge } from './ui';
 import { store, useStore, useDailyStudySec } from '../store';
 import { fmtDuration, fmtHM, fmtClock, playChime } from '../hooks';
-import { POMODORO_PRESETS, DAILY_GOALS, type SessionType, type PomodoroPhase } from '../types';
+import { POMODORO_PRESETS, DAILY_GOALS, type SessionType, type PomodoroPhase, type Settings } from '../types';
 import { clearRoomFocus, setRoomFocusPaused, setRoomFocusRunning } from '../lib/roomFocus';
+import { calculateElapsedSeconds } from '../lib/timer';
 
 type Tab = SessionType;
 
@@ -197,7 +198,9 @@ export function FocusView() {
                     min={1}
                     max={180}
                     value={settings[f.key]}
-                    onChange={(e) => store.updateSettings({ [f.key]: Math.max(1, +e.target.value || 1) } as any)}
+                    onChange={(e) => store.updateSettings({
+                      [f.key]: Math.max(1, +e.target.value || 1),
+                    } as Pick<Settings, typeof f.key>)}
                     className="w-full bg-transparent text-center font-bold text-lg outline-none"
                   />
                 </label>
@@ -249,7 +252,7 @@ export function FocusView() {
   );
 }
 
-function ToggleRow({ icon: Icon, label, value, onChange }: { icon: any; label: string; value: boolean; onChange: (v: boolean) => void }) {
+function ToggleRow({ icon: Icon, label, value, onChange }: { icon: LucideIcon; label: string; value: boolean; onChange: (v: boolean) => void }) {
   return (
     <button onClick={() => onChange(!value)} className="w-full flex items-center justify-between glass-subtle rounded-2xl px-4 py-3 glass-press">
       <span className="flex items-center gap-2 text-sm font-medium">
@@ -276,10 +279,9 @@ function useTimerEngine(opts: {
 
   useEffect(() => {
     if (!running) return;
-    startRef.current = Date.now();
+    if (startRef.current === null) startRef.current = Date.now();
     const tick = () => {
-      const now = Date.now();
-      const total = elapsedBaseRef.current + (now - (startRef.current ?? now)) / 1000;
+      const total = calculateElapsedSeconds(elapsedBaseRef.current, startRef.current, Date.now());
       setElapsed(total);
       if (opts.durationSec && total >= opts.durationSec) {
         stop();
@@ -297,22 +299,37 @@ function useTimerEngine(opts: {
 
   const start = () => {
     elapsedBaseRef.current = elapsed;
+    startRef.current = Date.now();
     setRunning(true);
   };
   const pause = () => {
+    const current = calculateElapsedSeconds(elapsedBaseRef.current, startRef.current, Date.now());
     setRunning(false);
-    elapsedBaseRef.current = elapsed;
+    setElapsed(current);
+    elapsedBaseRef.current = current;
+    startRef.current = null;
   };
   const stop = () => {
+    const current = calculateElapsedSeconds(elapsedBaseRef.current, startRef.current, Date.now());
     setRunning(false);
+    setElapsed(current);
+    elapsedBaseRef.current = current;
+    startRef.current = null;
   };
   const reset = () => {
     setRunning(false);
     setElapsed(0);
     elapsedBaseRef.current = 0;
+    startRef.current = null;
   };
 
-  return { running, elapsed, start, pause, stop, reset, setElapsed };
+  const getElapsed = () => calculateElapsedSeconds(
+    elapsedBaseRef.current,
+    running ? startRef.current : null,
+    Date.now(),
+  );
+
+  return { running, elapsed, start, pause, stop, reset, getElapsed };
 }
 
 function PomodoroTimer({ subject, category, onComplete }: {
@@ -383,10 +400,11 @@ function PomodoroTimer({ subject, category, onComplete }: {
   };
 
   const pauseTimer = () => {
+    const current = engine.getElapsed();
     engine.pause();
     if (!joinedRoomId) return;
     if (phase === 'focus') {
-      void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', engine.elapsed);
+      void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', current);
     } else {
       void setRoomFocusPaused(joinedRoomId, subject, 'pomodoro', 0);
     }
@@ -399,8 +417,9 @@ function PomodoroTimer({ subject, category, onComplete }: {
   };
 
   const handleEnd = () => {
-    if (completedDuration > 0 || engine.elapsed > 10) {
-      const total = completedDuration + Math.floor(phase === 'focus' ? engine.elapsed : 0);
+    const current = engine.getElapsed();
+    if (completedDuration > 0 || current > 10) {
+      const total = completedDuration + Math.floor(phase === 'focus' ? current : 0);
       const result = store.completeSession({
         type: 'pomodoro',
         subject,
@@ -505,8 +524,9 @@ function StopwatchTimer({ subject, category, onComplete }: {
   };
 
   const pauseTimer = () => {
+    const current = engine.getElapsed();
     engine.pause();
-    if (joinedRoomId) void setRoomFocusPaused(joinedRoomId, subject, 'stopwatch', engine.elapsed);
+    if (joinedRoomId) void setRoomFocusPaused(joinedRoomId, subject, 'stopwatch', current);
   };
 
   const resetTimer = () => {
@@ -516,7 +536,7 @@ function StopwatchTimer({ subject, category, onComplete }: {
   };
 
   const handleEnd = () => {
-    const total = Math.floor(engine.elapsed);
+    const total = Math.floor(engine.getElapsed());
     if (total < 10) {
       resetTimer();
       return;
@@ -603,8 +623,9 @@ function DeepFocusTimer({ subject, category, onComplete }: {
   };
 
   const pauseTimer = () => {
+    const current = engine.getElapsed();
     engine.pause();
-    if (joinedRoomId) void setRoomFocusPaused(joinedRoomId, subject, 'deep', engine.elapsed);
+    if (joinedRoomId) void setRoomFocusPaused(joinedRoomId, subject, 'deep', current);
   };
 
   const resetTimer = () => {
@@ -656,7 +677,7 @@ function DeepFocusTimer({ subject, category, onComplete }: {
         )}
         <GlassButton size="lg" variant="neutral" icon={RotateCcw} onClick={resetTimer}>Reset</GlassButton>
         <GlassButton size="lg" variant="danger" icon={Square} onClick={() => {
-          const total = Math.floor(engine.elapsed);
+          const total = Math.floor(engine.getElapsed());
           if (total < 10) {
             resetTimer();
             return;

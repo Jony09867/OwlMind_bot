@@ -79,7 +79,7 @@ export async function authenticateTelegram(): Promise<boolean> {
 
     const { data, error } = await supabase.auth.verifyOtp({
       token_hash: payload.tokenHash,
-      type: 'magiclink',
+      type: 'email',
     });
     if (error || !data.session) throw error ?? new Error('Supabase session was not created');
 
