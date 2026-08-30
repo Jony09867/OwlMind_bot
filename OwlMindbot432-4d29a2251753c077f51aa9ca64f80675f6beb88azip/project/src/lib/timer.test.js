@@ -13,4 +13,3 @@ test('returns the accumulated time while paused', () => {
 test('does not subtract study time when the device clock moves backwards', () => {
   assert.equal(calculateElapsedSeconds(45, 10_000, 9_000), 45);
 });
-
