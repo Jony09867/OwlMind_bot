@@ -604,4 +604,3 @@ function ToggleRow({ icon: Icon, label, value, onChange }: { icon: LucideIcon; l
     </button>
   );
 }
-
