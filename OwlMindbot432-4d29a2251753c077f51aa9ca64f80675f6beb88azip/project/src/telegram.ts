@@ -175,4 +175,3 @@ export function openTelegramLink(url: string): void {
 }
 
 export {};
-
