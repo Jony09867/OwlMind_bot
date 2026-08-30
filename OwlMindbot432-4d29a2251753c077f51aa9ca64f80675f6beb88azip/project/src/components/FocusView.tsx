@@ -694,4 +694,3 @@ function DeepFocusTimer({ subject, category, onComplete }: {
     </GlassCard>
   );
 }
-
